@@ -5,7 +5,21 @@ use crate::util;
 use std::io::Write;
 use std::path::PathBuf;
 
+/// TTS 转换入口（从 get 命令调用）
 #[allow(clippy::too_many_arguments)]
+pub fn run_tts(path: &str, output: Option<&str>, voice: &str, rate: &str, volume: &str, pitch: &str,
+               abr: u32, speed: Option<f32>, normalize: bool, cmd: &str, lrc_mode: &str, vb: bool) {
+    let p = std::path::Path::new(path);
+    let params = audio::TtsParams {
+        voice: voice.into(), rate: rate.into(), volume: volume.into(), pitch: pitch.into(),
+        abr, speed, normalize, cmd: cmd.into(), lrc_mode: lrc_mode.into(), verbose: vb,
+    };
+    if p.is_dir() { audio::convert_tts_dir(p, output.map(PathBuf::from), &params); }
+    else if p.is_file() { audio::convert_tts_file(p, output.map(PathBuf::from), &params); }
+    else { eprintln!("  err 文件不存在: {}", path); }
+}
+
+#[allow(clippy::too_many_arguments, dead_code)]
 pub fn run(book_id: Option<&str>, output: Option<&str>, range: Option<&str>, tone: usize,
            verbose: bool, tts_path: Option<&str>, voice: &str,
            rate: Option<String>, volume: Option<String>, pitch: Option<String>,
@@ -82,7 +96,7 @@ pub fn run(book_id: Option<&str>, output: Option<&str>, range: Option<&str>, ton
     run_download(&chs, &api, &out, tone, &cfg.audio_tone_fallbacks, abr_val, speed, normalize, post_cmd, lrc_mode, force, &cfg.filename_template, vb);
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, dead_code)]
 fn run_dir(path: &std::path::Path, range: Option<&str>, tone: usize, abr: u32, speed: Option<f32>,
            normalize: bool, post_cmd: &str, lrc_mode: &str, force: bool, vb: bool, cfg: &Config) {
     use crate::download;
@@ -133,7 +147,7 @@ fn run_dir(path: &std::path::Path, range: Option<&str>, tone: usize, abr: u32, s
     run_download(&new_chs, &api, &audio_dir, tone, &fallbacks, abr, speed, normalize, post_cmd, lrc_mode, force, &cfg.filename_template, vb);
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, dead_code)]
 fn run_download(chs: &[&crate::types::Chapter], api: &Client, out: &std::path::Path,
                 tone: usize, fallbacks: &[usize], abr: u32, speed: Option<f32>,
                 normalize: bool, post_cmd: &str, lrc_mode: &str, force: bool, ft: &str, vb: bool) {

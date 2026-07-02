@@ -82,6 +82,7 @@ pub struct Config {
     pub tts_pitch: String,
     pub abr: u32,
     pub post_process: String,
+    pub custom_commands: std::collections::HashMap<String, String>,
 }
 
 /// 下载工作流参数（来自 CLI 或默认值）
@@ -140,6 +141,7 @@ impl Default for Config {
             tts_pitch: "+0Hz".into(),
             abr: 0,
             post_process: String::new(),
+            custom_commands: std::collections::HashMap::new(),
         }
     }
 }

@@ -7,11 +7,20 @@ impl Config {
         let path = get_home().join(".config/fqdt/config.ini");
         let mut cfg = Config::default();
         if let Ok(text) = fs::read_to_string(&path) {
+            let mut section = String::new();
             for line in text.lines() {
                 let line = line.trim();
-                if line.is_empty() || line.starts_with('[') || line.starts_with('#') { continue; }
+                if line.is_empty() || line.starts_with('#') { continue; }
+                if let Some(sec) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+                    section = sec.trim().to_lowercase();
+                    continue;
+                }
                 if let Some((k, v)) = line.split_once('=') {
                     let k = k.trim(); let v = v.trim();
+                    if section == "workflow_cmd" && !k.is_empty() {
+                        cfg.custom_commands.insert(k.to_string(), v.to_string());
+                        continue;
+                    }
                     match k {
                         "concurrent" => cfg.concurrent = v.parse().unwrap_or(4),
                         "format" => cfg.format = v.into(),

@@ -59,7 +59,7 @@ pub fn run(book_id: &str, p: &DownloadParams, cfg: &Config) {
     if secs > 0 { println!("  \x1b[2m已用时 {}s\x1b[0m", secs); }
 }
 
-fn run_dir(path: &Path, p: &DownloadParams, vb: bool, cfg: &Config) {
+pub fn run_dir(path: &Path, p: &DownloadParams, vb: bool, cfg: &Config) {
     let has_text = path.join("info.list").exists();
     let has_audio = path.join("Audio/info.list").exists();
     if !has_text && !has_audio {
@@ -144,7 +144,7 @@ fn run_dir(path: &Path, p: &DownloadParams, vb: bool, cfg: &Config) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn fetch_and_dl_audio(book_id: &str, audio_dir: &Path, range: &Option<String>, tone: usize,
+pub fn fetch_and_dl_audio(book_id: &str, audio_dir: &Path, range: &Option<String>, tone: usize,
                       abr: u32, lrc: &str, force: bool, fallbacks: &[usize],
                       verbose: bool, cfg: &Config) {
     let vb = verbose || cfg.verbose;
