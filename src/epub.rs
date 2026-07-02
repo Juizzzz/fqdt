@@ -1,4 +1,5 @@
 use crate::types::Chapter;
+use crate::util;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -59,7 +60,7 @@ pub fn generate(title: &str, chapters: &[Chapter], path: &Path) -> Result<(), St
 <head><title>{ts}</title></head>
 <body><nav epub:type=\"toc\"><h1>{ts}</h1><ol>");
     for ch in chapters {
-        toc.push_str(&format!("\n<li><a href=\"ch{:04}.xhtml\">{}</a></li>", ch.index, xml_esc(&ch_title(ch))));
+        toc.push_str(&format!("\n<li><a href=\"ch{:04}.xhtml\">{}</a></li>", ch.index, xml_esc(&util::chapter_heading(ch))));
     }
     toc.push_str("\n</ol></nav></body></html>");
     z.start_file("OEBPS/toc.xhtml", deflated_opts()).map_err(|e| e.to_string())?;
@@ -72,8 +73,8 @@ pub fn generate(title: &str, chapters: &[Chapter], path: &Path) -> Result<(), St
 <html xmlns=\"http://www.w3.org/1999/xhtml\">
 <head><title>{}</title></head>
 <body><h1>{}</h1><p>待下载</p></body>
-</html>", xml_esc(&ch_title(ch)), xml_esc(&ch_title(ch)));
-        z.start_file(&format!("OEBPS/ch{:04}.xhtml", ch.index), deflated_opts()).map_err(|e| e.to_string())?;
+</html>", xml_esc(&util::chapter_heading(ch)), xml_esc(&util::chapter_heading(ch)));
+        z.start_file(format!("OEBPS/ch{:04}.xhtml", ch.index), deflated_opts()).map_err(|e| e.to_string())?;
         z.write_all(html.as_bytes()).map_err(|e| e.to_string())?;
     }
 
@@ -95,7 +96,7 @@ pub fn update_chapter(path: &Path, ch: &Chapter, content: &str) -> Result<(), St
 <head><title>{}</title></head>
 <body><h1>{}</h1>
 {}</body>
-</html>", xml_esc(&ch_title(ch)), xml_esc(&ch_title(ch)), content_to_html(content));
+</html>", xml_esc(&util::chapter_heading(ch)), xml_esc(&util::chapter_heading(ch)), content_to_html(content));
 
     let target = format!("OEBPS/ch{:04}.xhtml", ch.index);
 
@@ -116,14 +117,6 @@ pub fn update_chapter(path: &Path, ch: &Chapter, content: &str) -> Result<(), St
     drop(src);
     fs::rename(&tmp, path).map_err(|e| format!("重命名: {}", e))?;
     Ok(())
-}
-
-fn ch_title(ch: &Chapter) -> String {
-    if ch.title.starts_with('第') || ch.title.starts_with(|c: char| c.is_ascii_digit()) {
-        ch.title.clone()
-    } else {
-        format!("第{}章 {}", ch.index, ch.title)
-    }
 }
 
 fn content_to_html(s: &str) -> String {

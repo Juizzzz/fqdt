@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize)]
 pub struct Book {
     pub book_id: String,
     pub title: String,
@@ -17,7 +17,7 @@ impl Book {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize)]
 pub struct Chapter {
     pub index: usize,
     pub item_id: String,
@@ -68,7 +68,9 @@ pub struct Config {
     pub search_urls: Vec<String>,
     pub catalog_url: String,
     pub content_urls: Vec<String>,
+    pub batch_urls: Vec<String>,
     pub audio_content_urls: Vec<String>,
+    pub detail_url: String,
     pub audio_tone: usize,
     pub audio_tone_fallbacks: Vec<usize>,
     pub interval_ms: u64,
@@ -105,9 +107,13 @@ impl Default for Config {
                 "https://tt.sjmyzq.cn/api/raw_full?item_id={}".into(),
                 "http://101.35.133.34:5000/api/raw_full?item_id={}".into(),
             ],
+            batch_urls: vec![
+                "http://101.35.133.34:5000/api/content?tab=批量&book_id={}&item_ids={}".into(),
+            ],
             audio_content_urls: vec![
                 "http://101.35.133.34:5000/api/content?tab=听书&item_id={}&tone_id={}".into(),
             ],
+            detail_url: "http://101.35.133.34:5000/api/detail?book_id={}".into(),
             audio_tone: 1,
             audio_tone_fallbacks: vec![2, 4, 5, 6, 74, 91],
             interval_ms: 0,

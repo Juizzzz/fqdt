@@ -4,13 +4,11 @@ mod config;
 mod download;
 mod epub;
 mod types;
+mod util;
+mod workflow;
 
-use std::fs;
-use std::path::PathBuf;
-
-use api::Client;
 use clap::{Parser, Subcommand};
-use types::{ChapterRange, Config};
+use types::Config;
 
 #[derive(Parser)]
 #[command(name = "fqdt", version, about = "番茄小说下载器")]
@@ -35,102 +33,90 @@ struct Cli {
 enum Cmd {
     /// 搜索并下载小说
     Search {
+        /// 搜索关键词
         keyword: String,
-        /// 页码
-        #[arg(short='p', long, default_value="1")]
+        #[arg(short='p', long, default_value="1", help = "页码")]
         page: usize,
-        /// 自动下载第N本（跳过交互）
-        #[arg(short='D', long)]
+        #[arg(short='D', long, help = "自动下载第 N 本 (无需交互)")]
         auto: Option<usize>,
-        /// 仅搜索不下载
-        #[arg(long)]
+        #[arg(long, help = "仅搜索不下载")]
         dry_run: bool,
-        /// 输出目录
-        #[arg(short='o', long)]
+        #[arg(short='o', long, help = "输出目录")]
         output: Option<String>,
-        /// 并发数
-        #[arg(short='j', long)]
+        #[arg(short='j', long, help = "并发数")]
         jobs: Option<usize>,
-        /// 范围
-        #[arg(short='r', long)]
+        #[arg(short='r', long, help = "章节范围 (1-50 / -5 / 10-)")]
         range: Option<String>,
-        /// 格式
-        #[arg(short='t', long)]
+        #[arg(short='t', long, help = "输出格式 (txt/epub)")]
         format: Option<String>,
-        /// 间隔ms
-        #[arg(short='i', long, default_value = "0")]
+        #[arg(short='i', long, default_value = "0", help = "请求间隔(ms)")]
         interval: u64,
-        /// 详细
-        #[arg(short='v', long)]
+        #[arg(short='v', long, help = "详细输出")]
         verbose: bool,
     },
     /// 查看目录或内容
     Info {
+        /// 书籍 ID
         book_id: String,
-        /// 章节范围
-        #[arg(short='r', long)]
+        #[arg(short='r', long, help = "章节范围")]
         range: Option<String>,
-        /// 显示章节正文
-        #[arg(short='s', long)]
+        #[arg(short='s', long, help = "显示正文内容")]
         show: bool,
-        /// 详细
-        #[arg(short='v', long)]
+        #[arg(short='v', long, help = "详细输出")]
         verbose: bool,
     },
     /// 下载章节正文
     Download {
+        /// 书籍 ID 或本地目录
         book_id: String,
-        /// 输出目录
-        #[arg(short='o', long)]
+        #[arg(short='o', long, help = "输出目录")]
         output: Option<String>,
-        /// 并发数
-        #[arg(short='j', long)]
+        #[arg(short='j', long, help = "并发数")]
         jobs: Option<usize>,
-        /// 章节范围
-        #[arg(short='r', long)]
+        #[arg(short='r', long, help = "章节范围 (1-50 / -5 / 10-)")]
         range: Option<String>,
-        /// 格式
-        #[arg(short='t', long)]
+        #[arg(short='t', long, help = "输出格式 (txt/epub)")]
         format: Option<String>,
-        /// 间隔ms
-        #[arg(short='i', long, default_value = "0")]
+        #[arg(long, help = "同时下载音频")]
+        audio: bool,
+        #[arg(long, default_value = "1", help = "音色编号")]
+        tone: usize,
+        #[arg(long, default_value = "0", help = "压缩码率 (0=跳过)")]
+        abr: u32,
+        #[arg(long, default_value = "external", help = "歌词模式: external/embed/both/off")]
+        lrc: String,
+        #[arg(short='f', long, help = "强制覆盖已存在文件")]
+        force: bool,
+        #[arg(short='i', long, default_value = "0", help = "请求间隔(ms)")]
         interval: u64,
-        /// 详细
-        #[arg(short='v', long)]
+        #[arg(short='v', long, help = "详细输出")]
         verbose: bool,
     },
     /// 增量更新（只下载新章节）
     Update {
-        /// bookId或目录
+        /// 书籍 ID 或本地目录
         book_id: Option<String>,
-        /// 输出目录
-        #[arg(short='o', long)]
+        #[arg(short='o', long, help = "输出目录")]
         output: Option<String>,
-        /// 并发数
-        #[arg(short='j', long)]
+        #[arg(short='j', long, help = "并发数")]
         jobs: Option<usize>,
-        /// 范围
-        #[arg(short='r', long)]
+        #[arg(short='r', long, help = "章节范围")]
         range: Option<String>,
-        /// 音频
-        #[arg(long)]
+        #[arg(short='f', long, help = "强制覆盖")]
+        force: bool,
+        #[arg(long, help = "同时更新音频")]
         audio: bool,
-        /// 详细
-        #[arg(short='v', long)]
+        #[arg(short='v', long, help = "详细输出")]
         verbose: bool,
-        /// 间隔ms
-        #[arg(short='i', long, default_value = "0")]
+        #[arg(short='i', long, default_value = "0", help = "请求间隔(ms)")]
         interval: u64,
     },
     /// 书架管理
     Shelf {
-        /// 添加 <ID>:<标题>
         #[arg(short='a', long)]
         add: Option<String>,
-        /// 删除第N本
         #[arg(short='d', long)]
         delete: Option<usize>,
-        /// 下载第N本
         #[arg(short='D', long)]
         dl: Option<usize>,
     },
@@ -141,453 +127,107 @@ enum Cmd {
     TestApi,
     /// 下载语音或 TTS 转语音
     Audio {
-        /// bookId
+        /// 书籍 ID
         book_id: Option<String>,
-        /// 输出目录
-        #[arg(short='o', long)]
+        #[arg(short='o', long, help = "输出目录")]
         output: Option<String>,
-        /// 章节范围
-        #[arg(short='r', long)]
+        #[arg(short='r', long, help = "章节范围 (1-50 / -5 / 10-)")]
         range: Option<String>,
-        /// 音色
-        #[arg(long, default_value = "1")]
+        #[arg(long, default_value = "1", help = "音色编号")]
         tone: usize,
-        /// TTS文件/目录
-        #[arg(short='t', long)]
+        #[arg(short='t', long, help = "TTS 文本文件或目录路径 (代替 book_id)")]
         tts: Option<String>,
-        /// 语音
-        #[arg(long, default_value = "zh-CN-XiaoxiaoNeural")]
+        #[arg(long, default_value = "zh-CN-XiaoxiaoNeural", help = "TTS 语音")]
         voice: String,
-        /// 语速
-        #[arg(long)]
+        #[arg(long, help = "TTS 语速 (+0% / -50% / +100%)")]
         rate: Option<String>,
-        /// 音量
-        #[arg(long)]
+        #[arg(long, help = "TTS 音量 (+0% / -50%)")]
         volume: Option<String>,
-        /// 音调
-        #[arg(long)]
+        #[arg(long, help = "TTS 音调 (+0Hz / -20Hz / +20Hz)")]
         pitch: Option<String>,
-        /// 码率kbps
-        #[arg(long)]
+        #[arg(long, help = "压缩码率 kbps (0=跳过压缩, 32/64/128)")]
         abr: Option<u32>,
-        /// 变速
-        #[arg(long)]
+        #[arg(long, help = "变速播放 (0.5=半速, 2.0=双倍)")]
         speed: Option<f32>,
-        /// 归一化
-        #[arg(long)]
+        #[arg(long, help = "归一化音量 (均衡响度)")]
         normalize: bool,
-        /// 处理命令
-        #[arg(short='x', long)]
+        #[arg(short='e', long, help = "后处理命令模板 ({input} {output})")]
         exec: Option<String>,
-        /// LRC模式
-        #[arg(long, default_value = "external")]
+        #[arg(long, default_value = "external", help = "歌词模式: external / embed / both / off")]
         lrc: String,
-        /// 并发数
-        #[arg(short='j', long)]
+        #[arg(short='f', long, help = "强制重新下载已存在的文件")]
+        force: bool,
+        #[arg(short='j', long, help = "并发数")]
         jobs: Option<usize>,
-        /// 间隔ms
-        #[arg(short='i', long, default_value = "0")]
+        #[arg(short='i', long, default_value = "0", help = "请求间隔(ms)")]
         interval: u64,
-        /// 详细
-        #[arg(short='v', long)]
+        #[arg(short='v', long, help = "详细输出")]
         verbose: bool,
     },
-    /// 小工具集 (嵌入/后处理/转换)
-    #[command(subcommand)]
-    Function(FunctionCmd),
-}
-
-#[derive(Subcommand)]
-enum FunctionCmd {
-    /// 嵌入元数据
-    Embed {
-        /// 输入路径
-        input: String,
-        /// 嵌入LRC
-        #[arg(long)]
-        lrc: bool,
-        /// 封面
-        #[arg(long)]
-        cover: Option<String>,
-    },
-    /// 后处理
-    Process {
-        /// 输入路径
-        input: String,
-        /// 码率
-        #[arg(long)]
-        abr: Option<u32>,
-        /// 变速
-        #[arg(long)]
-        speed: Option<f32>,
-        /// 归一化
-        #[arg(long)]
-        normalize: bool,
-        /// 命令
-        #[arg(long)]
-        cmd: Option<String>,
+    /// 小工具集 + 函数管道。可用函数: embed, process, fetch-catalog, fetch-content, fetch-audio-url, search, strip-html, compress, embed-lrc, embed-cover, read-info, read-audio-info。管道: fn1 args \; fn2 {} args
+    Function {
+        #[arg(allow_hyphen_values = true, trailing_var_arg = true)]
+        args: Vec<String>,
     },
 }
 
 fn main() {
     let cli = Cli::parse();
     let mut cfg = Config::load();
-    cfg.apply_cli_overrides(cli.search_url.as_deref(), cli.catalog_url.as_deref(), cli.content_url.as_deref());
-    if let Some(to) = cli.timeout { cfg.timeout = to; }
-    if let Some(h) = cli.http { cfg.http_method = h; }
-    if let Some(c) = cli.curl_args { cfg.curl_args = c; }
+    cfg.apply_cli_overrides(
+        cli.search_url.as_deref(),
+        cli.catalog_url.as_deref(),
+        cli.content_url.as_deref(),
+    );
+    if let Some(to) = cli.timeout {
+        cfg.timeout = to;
+    }
+    if let Some(h) = cli.http {
+        cfg.http_method = h;
+    }
+    if let Some(c) = cli.curl_args {
+        cfg.curl_args = c;
+    }
     cfg.ensure_dirs();
     Config::save_default().ok();
 
     match cli.cmd {
         Cmd::Search { keyword, page, auto, dry_run, output, jobs, range, format, interval, verbose } =>
-            search(&keyword, page, output.as_deref(), jobs, range.as_deref(), format.as_deref(), verbose, auto, dry_run, interval, &cfg),
+            workflow::search::run(
+                &keyword, page, output.as_deref(), jobs, range.as_deref(),
+                format.as_deref(), verbose, auto, dry_run, interval, &cfg,
+            ),
         Cmd::Info { book_id, range, show, verbose } =>
-            info(&book_id, range.as_deref(), show, verbose, &cfg),
-        Cmd::Download { book_id, output, jobs, range, format, interval, verbose } =>
-            download(&book_id, output.as_deref(), jobs, range.as_deref(), format.as_deref(), verbose, interval, &cfg, None),
-        Cmd::Update { book_id, output, jobs, range, audio, verbose, interval } =>
-            update(book_id.as_deref(), output.as_deref(), jobs, range.as_deref(), audio, verbose, interval, &cfg),
+            workflow::info::run(&book_id, range.as_deref(), show, verbose, &cfg),
+        Cmd::Download { book_id, output, jobs, range, format, audio, tone, abr, lrc, force, interval, verbose } =>
+            workflow::download::run(
+                &book_id, output.as_deref(), jobs, range.as_deref(), format.as_deref(),
+                audio, tone, abr, &lrc, force, verbose, interval, &cfg, None,
+            ),
+        Cmd::Update { book_id, output, jobs, range, force, audio, verbose, interval } =>
+            workflow::update::run(
+                book_id.as_deref(), output.as_deref(), jobs, range.as_deref(),
+                force, audio, verbose, interval, &cfg,
+            ),
         Cmd::Shelf { add, delete, dl } =>
-            shelf(add, delete, dl, &cfg),
+            workflow::shelf::run(add, delete, dl, &cfg),
         Cmd::Init => {
             Config::save_default().ok();
             println!("  ok ~/.config/fqdt/config.ini");
         }
         Cmd::TestApi => test_api(&cfg),
-        Cmd::Audio { book_id, output, range, tone, tts, voice, rate, volume, pitch, abr, speed, normalize, exec, lrc, jobs, interval, verbose } =>
-            audio_dl(book_id.as_deref(), output.as_deref(), range.as_deref(), tone, verbose, tts.as_deref(), &voice, rate, volume, pitch, abr, speed, normalize, exec, &lrc, jobs, interval, &cfg),
-        Cmd::Function(fcmd) => run_function(fcmd, &cfg),
+        Cmd::Audio { book_id, output, range, tone, tts, voice, rate, volume, pitch, abr, speed, normalize, exec, lrc, force, jobs, interval, verbose } =>
+            workflow::audio::run(
+                book_id.as_deref(), output.as_deref(), range.as_deref(), tone, verbose,
+                tts.as_deref(), &voice, rate, volume, pitch, abr, speed, normalize,
+                exec, &lrc, force, jobs, interval, &cfg,
+            ),
+        Cmd::Function { args } => run_function(args, &cfg),
     }
-}
-
-fn search(keyword: &str, page: usize, output: Option<&str>, concurrent: Option<usize>,
-          range: Option<&str>, format: Option<&str>, verbose: bool, auto: Option<usize>,
-          no_download: bool, interval: u64, cfg: &Config) {
-    let api = Client::new(cfg.cache_dir.clone(), cfg.cache_enabled, cfg.cache_ttl,
-        cfg.search_urls.clone(), cfg.catalog_url.clone(), cfg.content_urls.clone(),
-        cfg.audio_content_urls.clone(), verbose || cfg.verbose, cfg.timeout,
-        cfg.http_method.clone(), cfg.curl_args.clone());
-    print!("  搜索 \"{}\" (第{}页)... ", keyword, page);
-    flush();
-    let books = match api.search(keyword, page) {
-        Ok(b) => b, Err(e) => { eprintln!("\n  err {}", e); return; }
-    };
-    if books.is_empty() { println!("无结果"); return; }
-    println!("{} 本", books.len());
-    println!();
-
-    let mut list_lines = 2;
-    for (i, b) in books.iter().enumerate() {
-        let status = b.status_text();
-        let abs: String = b.abstract_.chars().take(60).collect();
-        let abs = if b.abstract_.chars().count() > 60 { format!("{}...", abs) } else { b.abstract_.clone() };
-    println!("  \x1b[1;36m{:>2}.\x1b[0m {}", i+1, b.title);
-    println!("      {} \x1b[33m{}\x1b[0m | {} | \x1b[35m{}\x1b[0m \x1b[2m#{}\x1b[0m",
-        b.author, b.category, status, b.score, b.book_id);
-    list_lines += 2;
-    if !abs.is_empty() {
-        println!("      {}", abs);
-        list_lines += 1;
-    }
-    println!();
-    list_lines += 1;
-}
-
-if no_download {
-    println!("\n  \x1b[2m提示: 使用 info <book_id> 查看目录, download <book_id> 下载\x1b[0m");
-    return;
-}
-
-let idx = auto.map_or_else(|| {
-        print!("  \x1b[2m输入序号 (1-{}, 0=取消): \x1b[0m", books.len());
-        flush();
-        list_lines += 1;
-        let mut inp = String::new();
-        std::io::stdin().read_line(&mut inp).unwrap();
-        match inp.trim().parse::<usize>() {
-            Ok(n) if n >= 1 && n <= books.len() => n - 1,
-            _ => { println!("  \x1b[2m取消\x1b[0m"); books.len() }
-        }
-    }, |n| if n >= 1 && n <= books.len() { n - 1 } else { println!("  err 无效序号"); books.len() });
-
-    if idx >= books.len() { return; }
-    let book = &books[idx];
-
-    // fold search results, show selected book
-    if auto.is_none() { print!("\x1b[{}F\x1b[J", list_lines); }
-    println!("  \x1b[1;36m{}\x1b[0m  {} \x1b[33m{}\x1b[0m | {} | \x1b[35m{}\x1b[0m",
-        book.title, book.author, book.category, book.status_text(), book.score);
-    config::add_bookmark(&book.book_id, &book.title).ok();
-    download(&book.book_id, output, concurrent, range, format, verbose, interval, cfg, Some(&book.title));
-}
-
-fn info(book_id: &str, range: Option<&str>, show: bool, verbose: bool, cfg: &Config) {
-    let vb = verbose || cfg.verbose;
-    let api = Client::new(cfg.cache_dir.clone(), cfg.cache_enabled, cfg.cache_ttl,
-        cfg.search_urls.clone(), cfg.catalog_url.clone(), cfg.content_urls.clone(),
-        cfg.audio_content_urls.clone(), vb, cfg.timeout,
-        cfg.http_method.clone(), cfg.curl_args.clone());
-    print!("  获取目录... ");
-    flush();
-    let chs = match api.fetch_catalog(book_id) {
-        Ok(c) => c, Err(e) => { eprintln!("\n  ✗ {}", e); return; }
-    };
-    let r = range.and_then(ChapterRange::parse);
-    let v: Vec<&types::Chapter> = chs.iter().filter(|c| r.as_ref().map_or(true, |x| x.contains(c.index))).collect();
-    println!("{} 章", chs.len());
-
-    if show {
-        for c in &v {
-            println!("\n  \x1b[1;36m{:04} {}\x1b[0m", c.index, c.title);
-            match api.fetch_content(&c.item_id) {
-                Ok(text) => {
-                    for line in text.lines().take(40) {
-                        println!("  {}", line);
-                    }
-                    if text.lines().count() > 40 { println!("  \x1b[2m... (共{}行)\x1b[0m", text.lines().count()); }
-                }
-                Err(e) => println!("  err {}", e),
-            }
-        }
-    } else {
-        for c in &v { println!("  {:04}  {}", c.index, c.title); }
-        println!("\n  共 {} 章", v.len());
-    }
-}
-
-fn download(book_id: &str, output: Option<&str>, concurrent: Option<usize>,
-            range: Option<&str>, format: Option<&str>, verbose: bool,
-            _interval: u64, cfg: &Config, book_title: Option<&str>) {
-    let api = Client::new(cfg.cache_dir.clone(), cfg.cache_enabled, cfg.cache_ttl,
-        cfg.search_urls.clone(), cfg.catalog_url.clone(), cfg.content_urls.clone(),
-        cfg.audio_content_urls.clone(), verbose || cfg.verbose, cfg.timeout,
-        cfg.http_method.clone(), cfg.curl_args.clone());
-    print!("  获取目录... ");
-    flush();
-    let all = match api.fetch_catalog(book_id) {
-        Ok(c) => c, Err(e) => { eprintln!("\n  ✗ {}", e); return; }
-    };
-    let r = range.and_then(ChapterRange::parse);
-    let chs: Vec<&types::Chapter> = all.iter().filter(|c| r.as_ref().map_or(true, |x| x.contains(c.index))).collect();
-    if chs.is_empty() { println!("  err 空范围"); return; }
-
-    let fmt = format.unwrap_or(&cfg.format);
-    let out = output.map(|s| s.into()).unwrap_or(cfg.output_dir.clone());
-    let bt = book_title.unwrap_or("小说");
-    let dler = download::Downloader::new(api, out, fmt, &cfg.filename_template, verbose || cfg.verbose,
-        book_id, bt);
-    dler.run(&chs, concurrent.unwrap_or(cfg.concurrent));
-}
-
-fn shelf(add: Option<String>, delete: Option<usize>, dl: Option<usize>, cfg: &Config) {
-    if let Some(id_title) = add {
-        if let Some((id, title)) = id_title.split_once(':') {
-            match config::add_bookmark(id, title) {
-                Ok(_) => println!("  ok 已添加"),
-                Err(e) => eprintln!("  err {}", e),
-            }
-        } else { eprintln!("  err 格式: <ID>:<标题>"); }
-        return;
-    }
-    if let Some(idx) = delete {
-        match config::remove_bookmark(idx) {
-            Ok(_) => println!("  ok 已删除 #{}", idx),
-            Err(e) => eprintln!("  ✗ {}", e),
-        }
-        return;
-    }
-    if let Some(idx) = dl {
-        let books = config::load_bookmarks();
-        if idx == 0 || idx > books.len() { eprintln!("  err 无效编号"); return; }
-        let (id, title) = &books[idx - 1];
-        download(id, None, None, None, None, false, 0, cfg, Some(title));
-        return;
-    }
-    let books = config::load_bookmarks();
-    if books.is_empty() { println!("  书架为空"); return; }
-    println!("  书架 ({}):\n", books.len());
-    for (i, (id, t)) in books.iter().enumerate() {
-        println!("  {:>2}. \x1b[1;36m{}\x1b[0m  (ID:{})", i+1, t, id);
-    }
-    println!("\n  添加: fqdt shelf -a <ID>:<标题>");
-    println!("  删除: fqdt shelf -d <编号>");
-    println!("  下载: fqdt shelf -D <编号>");
-}
-
-fn update(book_id: Option<&str>, output: Option<&str>, concurrent: Option<usize>,
-          range: Option<&str>, audio: bool, verbose: bool, _interval: u64, cfg: &Config) {
-    let path = match book_id { Some(s) => PathBuf::from(s), None => { eprintln!("  err 需要 book_id 或目录"); return; } };
-    let vb = verbose || cfg.verbose;
-
-    // 目录检测模式: 参数是已有目录
-    if path.is_dir() {
-        if audio {
-            let audio_dir = path.join("Audio");
-            if !audio_dir.exists() { eprintln!("  err Audio/ 目录不存在"); return; }
-            let (bid, btitle, existing) = match download::read_audio_info_list(&audio_dir) {
-                Ok(v) => v, Err(e) => { eprintln!("  err {}", e); return; }
-            };
-            let api = Client::new(cfg.cache_dir.clone(), cfg.cache_enabled, cfg.cache_ttl,
-                cfg.search_urls.clone(), cfg.catalog_url.clone(), cfg.content_urls.clone(),
-                cfg.audio_content_urls.clone(), vb, cfg.timeout,
-                cfg.http_method.clone(), cfg.curl_args.clone());
-            print!("  获取目录... "); flush();
-            let all = match api.fetch_catalog(&bid) { Ok(c) => c, Err(e) => { eprintln!("\n  err {}", e); return; } };
-            let r = range.and_then(ChapterRange::parse);
-            let new_chs: Vec<&types::Chapter> = all.iter()
-                .filter(|c| !existing.iter().any(|(idx,_,_)| *idx == c.index))
-                .filter(|c| r.as_ref().map_or(true, |x| x.contains(c.index)))
-                .collect();
-            if new_chs.is_empty() { println!("  音频已是最新 (共{}章)", all.len()); return; }
-            println!("  发现 {} 章新音频 (共{}/{})", new_chs.len(), existing.len(), all.len());
-            let fallbacks = if cfg.audio_tone_fallbacks.is_empty() { vec![2,4,5,6,74,91] } else { cfg.audio_tone_fallbacks.clone() };
-            let dler = audio::AudioDownloader::new(api, audio_dir, cfg.audio_tone, fallbacks, &cfg.filename_template, vb,
-                cfg.abr, None, false, &cfg.post_process, "external");
-            dler.run(&new_chs, Some(&btitle));
-            return;
-        }
-
-        let (bid, btitle, fmt, existing) = match download::read_info_list(&path) {
-            Ok(v) => v, Err(e) => { eprintln!("  err {}", e); return; }
-        };
-        let api = Client::new(cfg.cache_dir.clone(), cfg.cache_enabled, cfg.cache_ttl,
-            cfg.search_urls.clone(), cfg.catalog_url.clone(), cfg.content_urls.clone(),
-            cfg.audio_content_urls.clone(), vb, cfg.timeout,
-            cfg.http_method.clone(), cfg.curl_args.clone());
-        print!("  获取目录... "); flush();
-        let all = match api.fetch_catalog(&bid) { Ok(c) => c, Err(e) => { eprintln!("\n  err {}", e); return; } };
-        if all.is_empty() { println!("  err 空目录"); return; }
-        let r = range.and_then(ChapterRange::parse);
-        let new_chs: Vec<&types::Chapter> = all.iter()
-            .filter(|c| !existing.iter().any(|(idx,_,_)| *idx == c.index))
-            .filter(|c| r.as_ref().map_or(true, |x| x.contains(c.index)))
-            .collect();
-        if new_chs.is_empty() { println!("  已是最新 (共{}章)", all.len()); return; }
-        println!("  发现 {} 章新章节 (共{}/{})", new_chs.len(), existing.len(), all.len());
-        let dler = download::Downloader::new(api, path, &fmt, &cfg.filename_template, vb, &bid, &btitle);
-        dler.run(&new_chs, concurrent.unwrap_or(cfg.concurrent));
-        return;
-    }
-
-    let bid = book_id.unwrap();
-    let api = Client::new(cfg.cache_dir.clone(), cfg.cache_enabled, cfg.cache_ttl,
-        cfg.search_urls.clone(), cfg.catalog_url.clone(), cfg.content_urls.clone(),
-        cfg.audio_content_urls.clone(), vb, cfg.timeout,
-        cfg.http_method.clone(), cfg.curl_args.clone());
-    print!("  获取目录... "); flush();
-    let all = match api.fetch_catalog(bid) { Ok(c) => c, Err(e) => { eprintln!("\n  err {}", e); return; } };
-    if all.is_empty() { println!("  err 空目录"); return; }
-
-    let out_dir = output.map(PathBuf::from).unwrap_or(cfg.output_dir.clone());
-    let r = range.and_then(ChapterRange::parse);
-
-    if audio {
-        let audio_dir = out_dir.join("Audio");
-        let mut max_existing = 0usize;
-        if audio_dir.exists() {
-            if let Ok(entries) = fs::read_dir(&audio_dir) {
-                for e in entries.flatten() {
-                    let name = e.file_name().to_string_lossy().to_string();
-                    if name.ends_with(".mp3") && name.chars().all(|c| c.is_ascii_digit() || c == '.') {
-                        if let Ok(n) = name.trim_end_matches(".mp3").parse::<usize>() {
-                            if n > max_existing { max_existing = n; }
-                        }
-                    }
-                }
-            }
-        }
-        let new_chs: Vec<&types::Chapter> = all.iter()
-            .filter(|c| c.index > max_existing)
-            .filter(|c| r.as_ref().map_or(true, |x| x.contains(c.index)))
-            .collect();
-        if new_chs.is_empty() { println!("  音频已是最新 (共{}章)", all.len()); return; }
-        println!("  发现 {} 章新音频 (共{}→{})", new_chs.len(), max_existing, all.len());
-        let fallbacks = if cfg.audio_tone_fallbacks.is_empty() { vec![2,4,5,6,74,91] } else { cfg.audio_tone_fallbacks.clone() };
-        let dler = audio::AudioDownloader::new(api, audio_dir, cfg.audio_tone, fallbacks, &cfg.filename_template, vb,
-            cfg.abr, None, false, &cfg.post_process, "external");
-        dler.run(&new_chs, None);
-        return;
-    }
-
-    let mut max_existing = 0usize;
-    if out_dir.exists() {
-        if let Ok(entries) = fs::read_dir(&out_dir) {
-            for e in entries.flatten() {
-                let name = e.file_name().to_string_lossy().to_string();
-                if name.ends_with(".txt") && name.chars().all(|c| c.is_ascii_digit() || c == '.') {
-                    if let Ok(n) = name.trim_end_matches(".txt").parse::<usize>() {
-                        if n > max_existing { max_existing = n; }
-                    }
-                }
-            }
-        }
-    }
-    let new_chs: Vec<&types::Chapter> = all.iter()
-        .filter(|c| c.index > max_existing)
-        .filter(|c| r.as_ref().map_or(true, |x| x.contains(c.index)))
-        .collect();
-    if new_chs.is_empty() { println!("  已是最新 (共{}章)", all.len()); return; }
-    println!("  发现 {} 章新章节 (共{}→{})", new_chs.len(), max_existing, all.len());
-    let dler = download::Downloader::new(api, out_dir, &cfg.format, &cfg.filename_template, vb, bid, "小说");
-    dler.run(&new_chs, concurrent.unwrap_or(cfg.concurrent));
-}
-
-fn audio_dl(book_id: Option<&str>, output: Option<&str>, range: Option<&str>, tone: usize, verbose: bool,
-            tts_path: Option<&str>, voice: &str,
-            rate: Option<String>, volume: Option<String>, pitch: Option<String>,
-            abr: Option<u32>, speed: Option<f32>, normalize: bool,
-            audio_cmd: Option<String>, lrc_mode: &str, _jobs: Option<usize>, _interval: u64, cfg: &Config) {
-    let tts_rate = rate.as_deref().unwrap_or(&cfg.tts_rate);
-    let tts_volume = volume.as_deref().unwrap_or(&cfg.tts_volume);
-    let tts_pitch = pitch.as_deref().unwrap_or(&cfg.tts_pitch);
-    let abr_val = abr.unwrap_or(cfg.abr);
-    let post_cmd = audio_cmd.as_deref().unwrap_or(&cfg.post_process);
-
-    if let Some(path) = tts_path {
-        let p = std::path::Path::new(path);
-        if p.is_dir() {
-            audio::convert_tts_dir(p, output.map(PathBuf::from), voice, tts_rate, tts_volume, tts_pitch,
-                abr_val, speed, normalize, post_cmd, lrc_mode, verbose || cfg.verbose);
-        } else if p.is_file() {
-            audio::convert_tts_file(p, output.map(PathBuf::from), voice, tts_rate, tts_volume, tts_pitch,
-                abr_val, speed, normalize, post_cmd, lrc_mode, verbose || cfg.verbose);
-        } else {
-            eprintln!("  err 文件不存在: {}", path);
-        }
-        return;
-    }
-
-    let bid = match book_id { Some(id) => id, None => { eprintln!("  err 需要 book_id 或 --tts"); return; } };
-    let api = Client::new(cfg.cache_dir.clone(), cfg.cache_enabled, cfg.cache_ttl,
-        cfg.search_urls.clone(), cfg.catalog_url.clone(), cfg.content_urls.clone(),
-        cfg.audio_content_urls.clone(), verbose || cfg.verbose, cfg.timeout,
-        cfg.http_method.clone(), cfg.curl_args.clone());
-    print!("  获取目录... "); flush();
-    let all = match api.fetch_catalog(bid) {
-        Ok(c) => c, Err(e) => { eprintln!("\n  err {}", e); return; }
-    };
-    let r = range.and_then(ChapterRange::parse);
-    let chs: Vec<&types::Chapter> = all.iter().filter(|c| r.as_ref().map_or(true, |x| x.contains(c.index))).collect();
-    if chs.is_empty() { println!("  err 空范围"); return; }
-
-    let out = output.map(|s| PathBuf::from(s).join("Audio")).unwrap_or_else(|| {
-        let mut p = cfg.output_dir.clone();
-        p.push("Audio");
-        p
-    });
-    let fallbacks = if cfg.audio_tone_fallbacks.is_empty() {
-        vec![2, 4, 5, 6, 74, 91]
-    } else {
-        cfg.audio_tone_fallbacks.clone()
-    };
-    let dler = audio::AudioDownloader::new(api, out, tone, fallbacks, &cfg.filename_template, verbose || cfg.verbose,
-        abr_val, speed, normalize, post_cmd, lrc_mode);
-    dler.run(&chs, None);
 }
 
 fn test_api(cfg: &Config) {
-    fn test(api: &Client, label: &str, url: &str, desc: &str) {
+    fn test(api: &api::Client, label: &str, url: &str, desc: &str) {
         print!("  {} {} ... ", label, desc);
         flush();
         match api.http_get(url) {
@@ -601,12 +241,9 @@ fn test_api(cfg: &Config) {
         }
     }
 
-    let api = Client::new(
-        cfg.cache_dir.clone(), false, 0,
-        cfg.search_urls.clone(), cfg.catalog_url.clone(), cfg.content_urls.clone(),
-        cfg.audio_content_urls.clone(), cfg.verbose, cfg.timeout,
-        cfg.http_method.clone(), cfg.curl_args.clone(),
-    );
+    let mut api = api::Client::from_config(cfg, cfg.verbose);
+    api.cache_enabled = false;
+    api.cache_ttl = 0;
 
     println!("\n  📡 API 测试\n");
 
@@ -629,59 +266,222 @@ fn test_api(cfg: &Config) {
     println!();
 }
 
-fn run_function(cmd: FunctionCmd, cfg: &Config) {
-    let vb = cfg.verbose;
-    match cmd {
-        FunctionCmd::Embed { input, lrc, cover } => {
-            let p = std::path::Path::new(&input);
-            if !p.exists() { eprintln!("  err {} 不存在", input); return; }
-            if lrc {
-                if p.is_dir() {
-                    for entry in std::fs::read_dir(p).unwrap() {
-                        if let Ok(e) = entry {
-                            let path = e.path();
-                            if path.extension().map(|x| x == "mp3").unwrap_or(false) {
-                                let ch = crate::types::Chapter { index: 0, title: path.file_stem().unwrap().to_string_lossy().to_string(), item_id: String::new() };
-                                crate::audio::embed_lrc(&path, &ch, vb);
-                                println!("  ok {}", path.display());
-                            }
-                        }
-                    }
-                } else if p.extension().map(|x| x == "mp3").unwrap_or(false) {
-                    let ch = crate::types::Chapter { index: 0, title: p.file_stem().unwrap().to_string_lossy().to_string(), item_id: String::new() };
-                    crate::audio::embed_lrc(p, &ch, vb);
-                    println!("  ok {}", p.display());
-                } else {
-                    eprintln!("  err 不是 MP3 文件");
-                }
+fn run_function(args: Vec<String>, cfg: &Config) {
+    if args.is_empty() {
+        eprintln!("  err 需要函数名或管道\n  用法:\n  \
+            fqdt function embed <file> [--lrc] [--cover <img>]\n  \
+            fqdt function process <file> [--abr N] [--speed X] [--normalize] [--cmd <cmd>]\n  \
+            fqdt function fetch-catalog <book_id>\n  \
+            fqdt function fetch-content <item_id>\n  \
+            fqdt function fetch-audio-url <item_id> [tone]\n  \
+            fqdt function search <keyword> [-p <page>]\n  \
+            fqdt function strip-html <file|->\n  \
+            fqdt function compress <file> [--abr N]\n  \
+            fqdt function embed-lrc <file>\n  \
+            fqdt function embed-cover <file> <cover>\n  \
+            fqdt function read-info <dir>\n  \
+            fqdt function read-audio-info <dir>\n  \
+            fqdt function ... \\; ... \\; ...  (chaining with ;)");
+        return;
+    }
+
+    let sep_positions: Vec<usize> = args.iter().enumerate()
+        .filter(|(_, s)| *s == ";").map(|(i, _)| i).collect();
+
+    if sep_positions.is_empty() {
+        let out = dispatch_one(&args, cfg, "");
+        if !out.is_empty() { println!("{}", out); }
+    } else {
+        let mut segments: Vec<&[String]> = vec![];
+        let mut start = 0usize;
+        for &pos in &sep_positions {
+            if pos > start {
+                segments.push(&args[start..pos]);
             }
-            if let Some(cover_path) = cover {
-                eprintln!("  warn 封面嵌入暂未实现: {}", cover_path);
-            }
+            start = pos + 1;
         }
-        FunctionCmd::Process { input, abr, speed, normalize, cmd } => {
-            let p = std::path::Path::new(&input);
-            if !p.exists() { eprintln!("  err {} 不存在", input); return; }
-            let abr_val = abr.unwrap_or(0);
-            let cmd_ref = cmd.as_deref().unwrap_or("");
-            if p.is_dir() {
-                for entry in std::fs::read_dir(p).unwrap() {
-                    if let Ok(e) = entry {
-                        let path = e.path();
-                        if path.extension().map(|x| x == "mp3").unwrap_or(false) {
-                            crate::audio::post_process(&path, abr_val, speed, normalize, cmd_ref, vb);
-                            println!("  ok {}", path.display());
-                        }
-                    }
-                }
-            } else {
-                crate::audio::post_process(p, abr_val, speed, normalize, cmd_ref, vb);
-                println!("  ok {}", p.display());
+        if start < args.len() {
+            segments.push(&args[start..]);
+        }
+
+        let mut piped = String::new();
+        for seg in &segments {
+            if seg.is_empty() { continue; }
+            let resolved: Vec<String> = seg.iter()
+                .map(|a| a.replace("{}", &piped))
+                .collect();
+            piped = dispatch_one(&resolved, cfg, &piped);
+            if !piped.is_empty() {
+                println!("{}", piped);
             }
         }
     }
 }
 
+fn dispatch_one(args: &[String], cfg: &Config, _piped: &str) -> String {
+    fn err(e: String) -> String { eprintln!("  err {}", e); String::new() }
+
+    if args.is_empty() { return String::new(); }
+    let func = &args[0];
+    let rest: Vec<&str> = args[1..].iter().map(|s| s.as_str()).collect();
+
+    match func.as_str() {
+        "embed" | "emb" => {
+            if rest.is_empty() { return err("需要 input 路径".into()); }
+            let input = rest[0].to_string();
+            let lrc = rest.contains(&"--lrc");
+            let cover = rest.iter().position(|a| *a == "--cover").and_then(|i| rest.get(i+1).map(|s| s.to_string()));
+            workflow::embed::run(&input, lrc, cover, cfg);
+            input
+        }
+        "process" | "proc" => {
+            if rest.is_empty() { return err("需要 input 路径".into()); }
+            let input = rest[0].to_string();
+            let abr = rest.iter().position(|a| *a == "--abr").and_then(|i| rest.get(i+1).and_then(|s| s.parse::<u32>().ok()));
+            let speed = rest.iter().position(|a| *a == "--speed").and_then(|i| rest.get(i+1).and_then(|s| s.parse::<f32>().ok()));
+            let normalize = rest.contains(&"--normalize");
+            let cmd = rest.iter().position(|a| *a == "--cmd").and_then(|i| rest.get(i+1).map(|s| s.to_string()));
+            workflow::process::run(&input, abr, speed, normalize, cmd, cfg);
+            input
+        }
+        "fetch-catalog" | "cat" => {
+            if rest.is_empty() { return err("需要 book_id".into()); }
+            let api = api::Client::from_config(cfg, cfg.verbose);
+            match api.fetch_catalog(rest[0]) {
+                Ok(chs) => {
+                    let json = serde_json::to_string_pretty(&chs).unwrap_or_default();
+                    println!("{}", json);
+                    chs.iter().map(|c| c.item_id.clone()).next().unwrap_or_default()
+                }
+                Err(e) => err(e)
+            }
+        }
+        "fetch-content" | "content" => {
+            if rest.is_empty() { return err("需要 item_id".into()); }
+            let api = api::Client::from_config(cfg, cfg.verbose);
+            match api.fetch_content(rest[0]) {
+                Ok(text) => { println!("{}", text); text }
+                Err(e) => err(e)
+            }
+        }
+        "fetch-audio-url" | "audio-url" => {
+            if rest.is_empty() { return err("需要 item_id".into()); }
+            let tone: usize = rest.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
+            let api = api::Client::from_config(cfg, cfg.verbose);
+            match api.fetch_audio_url(rest[0], tone) {
+                Ok(url) => { println!("{}", url); url }
+                Err(e) => err(e)
+            }
+        }
+        "search" => {
+            if rest.is_empty() { return err("需要 keyword".into()); }
+            let keyword = rest[0].to_string();
+            let page: usize = rest.iter().position(|a| *a == "-p" || *a == "--page")
+                .and_then(|i| rest.get(i+1).and_then(|s| s.parse().ok())).unwrap_or(1);
+            let api = api::Client::from_config(cfg, cfg.verbose);
+            match api.search(&keyword, page) {
+                Ok(books) => {
+                    let json = serde_json::to_string_pretty(&books).unwrap_or_default();
+                    println!("{}", json);
+                    books.iter().map(|b| b.book_id.clone()).next().unwrap_or_default()
+                }
+                Err(e) => err(e)
+            }
+        }
+        "strip-html" | "html" => {
+            if rest.is_empty() { return err("需要文件路径或 -".into()); }
+            let text = if rest[0] == "-" {
+                let mut buf = String::new();
+                std::io::stdin().read_line(&mut buf).ok();
+                buf
+            } else {
+                std::fs::read_to_string(rest[0]).unwrap_or_default()
+            };
+            let out = api::strip_html(&text);
+            println!("{}", out);
+            out
+        }
+        "compress" | "mp3" => {
+            if rest.is_empty() { return err("需要文件路径".into()); }
+            let input = rest[0].to_string();
+            let abr: u32 = rest.iter().position(|a| *a == "--abr")
+                .and_then(|i| rest.get(i+1).and_then(|s| s.parse().ok())).unwrap_or(32);
+            let path = std::path::Path::new(&input);
+            audio::post_process(path, abr, None, false, "", cfg.verbose);
+            println!("  ok {}", input);
+            input
+        }
+        "embed-lrc" | "lrc" => {
+            if rest.is_empty() { return err("需要 MP3 路径".into()); }
+            let input = rest[0].to_string();
+            let path = std::path::Path::new(&input);
+            let ch = types::Chapter {
+                index: 0,
+                title: path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+                item_id: String::new(),
+            };
+            audio::embed_lrc(path, &ch, cfg.verbose, None);
+            println!("  ok {}", input);
+            input
+        }
+        "embed-cover" | "cover" => {
+            if rest.len() < 2 { return err("需要 MP3 路径和封面路径".into()); }
+            let mp3 = rest[0];
+            let cover = rest[1];
+            audio::embed_cover(std::path::Path::new(mp3), std::path::Path::new(cover), cfg.verbose);
+            println!("  ok {} ← {}", mp3, cover);
+            mp3.to_string()
+        }
+        "read-info" | "info" => {
+            if rest.is_empty() { return err("需要目录路径".into()); }
+            match download::read_info_list(std::path::Path::new(rest[0])) {
+                Ok((bid, title, fmt, chapters)) => {
+                    let out = format!("book_id={}, title={}, format={}, chapters={}",
+                        bid, title, fmt, chapters.len());
+                    println!("  {}", out);
+                    out
+                }
+                Err(e) => err(e)
+            }
+        }
+        "read-audio-info" | "audio-info" => {
+            if rest.is_empty() { return err("需要目录路径".into()); }
+            let dir = std::path::Path::new(rest[0]);
+            let audio_dir = if dir.join("Audio").exists() { dir.join("Audio") } else { dir.to_path_buf() };
+            match download::read_audio_info_list(&audio_dir) {
+                Ok((bid, title, chapters)) => {
+                    let out = format!("book_id={}, title={}, chapters={}", bid, title, chapters.len());
+                    println!("  {}", out);
+                    out
+                }
+                Err(e) => err(e)
+            }
+        }
+        "fetch-detail" | "detail" => {
+            if rest.is_empty() { return err("需要 book_id".into()); }
+            let api = api::Client::from_config(cfg, cfg.verbose);
+            match api.fetch_detail(rest[0]) {
+                Ok(info) => { println!("  {}", info); info }
+                Err(e) => err(e)
+            }
+        }
+        "fetch-content-batch" | "batch" => {
+            if rest.len() < 2 { return err("需要 book_id 和 item_ids".into()); }
+            let item_ids: Vec<&str> = rest[1..].to_vec();
+            let api = api::Client::from_config(cfg, cfg.verbose);
+            match api.fetch_content_batch(rest[0], &item_ids) {
+                Ok(map) => {
+                    for (id, content) in &map {
+                        println!("  [{}]\n{}\n", id, content);
+                    }
+                    map.into_values().next().unwrap_or_default()
+                }
+                Err(e) => err(e)
+            }
+        }
+        _ => err(format!("未知函数: {}", func))
+    }
+}
 
 fn flush() {
     use std::io::Write;
