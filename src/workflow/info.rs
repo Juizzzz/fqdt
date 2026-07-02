@@ -5,6 +5,22 @@ use crate::util;
 pub fn run(book_id: &str, range: Option<&str>, show: bool, verbose: bool, cfg: &Config) {
     let vb = verbose || cfg.verbose;
     let api = Client::from_config(cfg, vb);
+
+    // 获取书籍详情
+    let detail = api.fetch_detail(book_id).ok();
+    if let Some(d) = &detail {
+        let parts: Vec<&str> = d.splitn(3, '|').collect();
+        let title = parts.first().unwrap_or(&"");
+        let author = parts.get(1).unwrap_or(&"");
+        let intro = parts.get(2).unwrap_or(&"");
+        println!("  {} \x1b[33m{}\x1b[0m", title, author);
+        if !intro.is_empty() {
+            let abbr: String = intro.chars().take(120).collect();
+            let abbr = if intro.len() > 120 { format!("{}...", abbr) } else { abbr };
+            println!("  \x1b[2m{}\x1b[0m", abbr);
+        }
+    }
+
     print!("  获取目录... ");
     flush();
     let chs = match api.fetch_catalog(book_id) {
@@ -16,7 +32,9 @@ pub fn run(book_id: &str, range: Option<&str>, show: bool, verbose: bool, cfg: &
     };
     let r = range.and_then(ChapterRange::parse);
     let v = util::filter_by_range(&chs, r.as_ref());
-    println!("{} 章", chs.len());
+
+    if detail.is_some() { println!("  共{}章 显示{}章", chs.len(), v.len()); }
+    else { println!("{} 章", chs.len()); }
 
     if show {
         for c in &v {
@@ -37,7 +55,11 @@ pub fn run(book_id: &str, range: Option<&str>, show: bool, verbose: bool, cfg: &
         for c in &v {
             println!("  {:04}  {}", c.index, c.title);
         }
-        println!("\n  共 {} 章", v.len());
+        if v.len() < chs.len() {
+            println!("\n  {} / {}", v.len(), chs.len());
+        } else {
+            println!("\n  共 {} 章", v.len());
+        }
     }
 }
 

@@ -199,11 +199,11 @@ fn main() {
             ),
         Cmd::Info { book_id, range, show, verbose } =>
             workflow::info::run(&book_id, range.as_deref(), show, verbose, &cfg),
-        Cmd::Download { book_id, output, jobs, range, format, audio, tone, abr, lrc, force, interval, verbose } =>
-            workflow::download::run(
-                &book_id, output.as_deref(), jobs, range.as_deref(), format.as_deref(),
-                audio, tone, abr, &lrc, force, verbose, interval, &cfg, None,
-            ),
+        Cmd::Download { book_id, output, jobs, range, format, audio, tone, abr, lrc, force, interval: _, verbose } =>
+            workflow::download::run(&book_id, &types::DownloadParams {
+                output, range, format, concurrent: jobs, audio, tone, abr,
+                lrc, force, verbose, book_title: None,
+            }, &cfg),
         Cmd::Update { book_id, output, jobs, range, force, audio, verbose, interval } =>
             workflow::update::run(
                 book_id.as_deref(), output.as_deref(), jobs, range.as_deref(),

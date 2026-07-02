@@ -1,4 +1,5 @@
 use crate::config;
+use crate::types;
 use crate::types::Config;
 
 pub fn run(add: Option<String>, delete: Option<usize>, dl: Option<usize>, cfg: &Config) {
@@ -27,7 +28,12 @@ pub fn run(add: Option<String>, delete: Option<usize>, dl: Option<usize>, cfg: &
             return;
         }
         let (id, title) = &books[idx - 1];
-        super::download::run(id, None, None, None, None, false, 1, 0, "external", false, false, 0, cfg, Some(title));
+        super::download::run(id, &types::DownloadParams {
+            output: None, range: None, format: None, concurrent: None,
+            audio: false, tone: 1, abr: 0,
+            lrc: "external".into(), force: false,
+            verbose: false, book_title: Some(title.clone()),
+        }, cfg);
         return;
     }
     let books = config::load_bookmarks();

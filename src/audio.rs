@@ -5,6 +5,7 @@ use indicatif::ProgressBar;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
+use std::time::Instant;
 
 #[derive(Clone)]
 pub struct AudioParams {
@@ -45,6 +46,7 @@ impl AudioDownloader {
     }
 
     pub fn run(&self, chapters: &[&Chapter], book_title: Option<&str>) {
+        let start = Instant::now();
         if chapters.is_empty() { println!("  无章节"); return; }
         fs::create_dir_all(&self.out_dir).expect("创建目录失败");
 
@@ -83,6 +85,8 @@ impl AudioDownloader {
         if failed > 0 { println!("  失败 {} 章", failed); }
 
         self.write_info_list(chapters, book_title);
+        let secs = start.elapsed().as_secs();
+        if secs > 0 { println!("  \x1b[2m已用时 {}s\x1b[0m", secs); }
     }
 
     fn write_info_list(&self, chapters: &[&Chapter], book_title: Option<&str>) {

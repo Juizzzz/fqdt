@@ -84,6 +84,21 @@ pub struct Config {
     pub post_process: String,
 }
 
+/// 下载工作流参数（来自 CLI 或默认值）
+pub struct DownloadParams {
+    pub output: Option<String>,
+    pub range: Option<String>,
+    pub format: Option<String>,
+    pub concurrent: Option<usize>,
+    pub audio: bool,
+    pub tone: usize,
+    pub abr: u32,
+    pub lrc: String,
+    pub force: bool,
+    pub verbose: bool,
+    pub book_title: Option<String>,
+}
+
 impl Default for Config {
     fn default() -> Self {
         let home = get_home();
