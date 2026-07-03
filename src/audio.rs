@@ -131,6 +131,27 @@ fn dl_one(api: &Client, out_dir: &Path, ch: &Chapter, p: &AudioParams) -> Result
         return Ok(());
     }
 
+    // 哈希对比：已存在文件且 --force 时，先对比大小再决定是否跳过
+    if p.force && path.exists() {
+        let old_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let mut all_tones_force = vec![p.tone];
+        all_tones_force.extend(p.fallbacks.iter().filter(|&&t| t != p.tone));
+        for &t in &all_tones_force {
+            if let Ok(audio_url) = api.fetch_audio_url(&ch.item_id, t) {
+                if let Ok(resp) = minreq::get(&audio_url).with_timeout(30).send() {
+                    let new_size = resp.as_bytes().len() as u64;
+                    if new_size == old_size && new_size > 1000 {
+                        if p.verbose { eprintln!("  {:04} {} 不变 ✓", ch.index, ch.title); }
+                        let content = api.fetch_content(&ch.item_id).ok();
+                        handle_lrc(&path, ch, &p.lrc_mode, p.verbose, content.as_deref());
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        // 大小不同或无法获取 → 继续下载覆盖
+    }
+
     let mut all_tones = vec![p.tone];
     all_tones.extend(p.fallbacks.iter().filter(|&&t| t != p.tone));
 

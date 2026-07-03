@@ -130,7 +130,16 @@ fn write_chapter(out_dir: &Path, ft: &str, ch: &Chapter, content: &str, verbose:
     let path = out_dir.join(format!("{}.txt", name));
     let heading = if util::has_chapter_prefix(&ch.title) { ch.title.clone() } else { format!("第{}章 {}", ch.index, ch.title) };
     let text = format!("{}\n\n{}\n", heading, content);
-    let mut f = fs::File::create(&path).map_err(|e| format!("写入: {}", e))?;
+    // 哈希对比：已存在且内容相同则跳过写入
+    if path.exists() {
+        if let Ok(old) = std::fs::read_to_string(&path) {
+            if old == text {
+                if verbose { eprintln!("  {:04} {} 不变 ✓", ch.index, ch.title); }
+                return Ok(());
+            }
+        }
+    }
+    let mut f = std::fs::File::create(&path).map_err(|e| format!("写入: {}", e))?;
     f.write_all(text.as_bytes()).map_err(|e| format!("写入: {}", e))?;
     if verbose { eprintln!("  {:04} {} ✓", ch.index, ch.title); }
     Ok(())
