@@ -7,19 +7,19 @@ use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
 
-pub fn run(book_id: &str, p: &DownloadParams, cfg: &Config) {
+pub async fn run(book_id: &str, p: &DownloadParams, cfg: &Config) {
     let start = Instant::now();
     let vb = p.verbose || cfg.verbose;
     let path = Path::new(book_id);
 
     if path.is_dir() {
-        return run_dir(path, p, vb, cfg);
+        return run_dir(path, p, vb, cfg).await;
     }
 
     let api = Client::from_config(cfg, vb);
     print!("  获取目录... ");
     std::io::stdout().flush().unwrap();
-    let all = match api.fetch_catalog(book_id) {
+    let all = match api.fetch_catalog(book_id).await {
         Ok(c) => c,
         Err(e) => {
             eprintln!("\n  err {}", e);
@@ -38,14 +38,16 @@ pub fn run(book_id: &str, p: &DownloadParams, cfg: &Config) {
         .as_ref()
         .map(|s| s.into())
         .unwrap_or(cfg.output_dir.clone());
-    let bt: &str = &p.book_title.clone().unwrap_or_else(|| {
-        if let Ok(detail) = api.fetch_detail(book_id) {
-            detail.split('|').next().unwrap_or("小说").to_string()
-        } else { "小说".into() }
-    });
+    let bt: String = match p.book_title {
+        Some(ref title) => title.clone(),
+        None => match api.fetch_detail(book_id).await {
+            Ok(detail) => detail.split('|').next().unwrap_or("小说").to_string(),
+            Err(_) => "小说".into(),
+        },
+    };
     let dler = download::Downloader::new(api, out.clone(), fmt, &cfg.filename_template, false, vb,
-                                          book_id, bt);
-    dler.run(&chs, p.concurrent.unwrap_or(cfg.concurrent));
+                                          book_id, &bt);
+    dler.run(&chs, p.concurrent.unwrap_or(cfg.concurrent)).await;
 
     if p.audio {
         let fallbacks = if cfg.audio_tone_fallbacks.is_empty() {
@@ -53,13 +55,13 @@ pub fn run(book_id: &str, p: &DownloadParams, cfg: &Config) {
         } else {
             cfg.audio_tone_fallbacks.clone()
         };
-        fetch_and_dl_audio(book_id, &out.join("Audio"), &p.range, p.tone, p.abr, &p.lrc, p.force, &fallbacks, vb, cfg);
+        fetch_and_dl_audio(book_id, &out.join("Audio"), &p.range, p.tone, p.abr, &p.lrc, p.force, &fallbacks, vb, cfg).await;
     }
     let secs = start.elapsed().as_secs();
     if secs > 0 { println!("  \x1b[2m已用时 {}s\x1b[0m", secs); }
 }
 
-pub fn run_dir(path: &Path, p: &DownloadParams, vb: bool, cfg: &Config) {
+pub async fn run_dir(path: &Path, p: &DownloadParams, vb: bool, cfg: &Config) {
     let has_text = path.join("info.list").exists();
     let has_audio = path.join("Audio/info.list").exists();
     if !has_text && !has_audio {
@@ -72,7 +74,7 @@ pub fn run_dir(path: &Path, p: &DownloadParams, vb: bool, cfg: &Config) {
             let api = Client::from_config(cfg, vb);
             print!("  检查正文更新... ");
             std::io::stdout().flush().unwrap();
-            if let Ok(all) = api.fetch_catalog(&bid) {
+            if let Ok(all) = api.fetch_catalog(&bid).await {
                 let r = p.range.as_deref().and_then(ChapterRange::parse);
                 let new_chs: Vec<&crate::types::Chapter> = all
                     .iter()
@@ -84,8 +86,8 @@ pub fn run_dir(path: &Path, p: &DownloadParams, vb: bool, cfg: &Config) {
                 } else {
                     println!("  发现 {} 章新正文 (共{}/{})", new_chs.len(), existing.len(), all.len());
                     let dler = download::Downloader::new(api, path.to_path_buf(), &fmt,
-                                                         &cfg.filename_template, p.force, vb, &bid, &btitle);
-                    dler.run(&new_chs, p.concurrent.unwrap_or(cfg.concurrent));
+                                                          &cfg.filename_template, p.force, vb, &bid, &btitle);
+                    dler.run(&new_chs, p.concurrent.unwrap_or(cfg.concurrent)).await;
                 }
             }
         }
@@ -108,13 +110,13 @@ pub fn run_dir(path: &Path, p: &DownloadParams, vb: bool, cfg: &Config) {
                 } else {
                     cfg.audio_tone_fallbacks.clone()
                 };
-                fetch_and_dl_audio(&bid2, &audio_dir, &p.range, p.tone, p.abr, &p.lrc, p.force, &fallbacks, vb, cfg);
+                fetch_and_dl_audio(&bid2, &audio_dir, &p.range, p.tone, p.abr, &p.lrc, p.force, &fallbacks, vb, cfg).await;
             }
         } else {
             let api = Client::from_config(cfg, vb);
             print!("  检查音频更新... ");
             std::io::stdout().flush().unwrap();
-            if let Ok(all) = api.fetch_catalog(&bid) {
+            if let Ok(all) = api.fetch_catalog(&bid).await {
                 let r = p.range.as_deref().and_then(ChapterRange::parse);
                 let new_chs: Vec<&crate::types::Chapter> = all
                     .iter()
@@ -136,7 +138,7 @@ pub fn run_dir(path: &Path, p: &DownloadParams, vb: bool, cfg: &Config) {
                         abr: p.abr, speed: None, normalize: false,
                         post_cmd: String::new(), lrc_mode: p.lrc.clone(),
                     });
-                    dler.run(&new_chs, Some(&btitle));
+                    dler.run(&new_chs, Some(&btitle)).await;
                 }
             }
         }
@@ -144,14 +146,14 @@ pub fn run_dir(path: &Path, p: &DownloadParams, vb: bool, cfg: &Config) {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn fetch_and_dl_audio(book_id: &str, audio_dir: &Path, range: &Option<String>, tone: usize,
+pub async fn fetch_and_dl_audio(book_id: &str, audio_dir: &Path, range: &Option<String>, tone: usize,
                       abr: u32, lrc: &str, force: bool, fallbacks: &[usize],
                       verbose: bool, cfg: &Config) {
     let vb = verbose || cfg.verbose;
     let api = Client::from_config(cfg, vb);
     print!("  获取目录... ");
     std::io::stdout().flush().unwrap();
-    match api.fetch_catalog(book_id) {
+    match api.fetch_catalog(book_id).await {
         Ok(all) => {
             if all.is_empty() {
                 println!("  err 空目录");
@@ -174,7 +176,7 @@ pub fn fetch_and_dl_audio(book_id: &str, audio_dir: &Path, range: &Option<String
                 abr, speed: None, normalize: false,
                 post_cmd: String::new(), lrc_mode: lrc.into(),
             });
-            dler.run(&chs, None);
+            dler.run(&chs, None).await;
         }
         Err(e) => eprintln!("  err {}", e),
     }

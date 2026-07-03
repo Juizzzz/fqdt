@@ -45,7 +45,7 @@ impl AudioDownloader {
         AudioDownloader { api, out_dir, p }
     }
 
-    pub fn run(&self, chapters: &[&Chapter], book_title: Option<&str>) {
+    pub async fn run(&self, chapters: &[&Chapter], book_title: Option<&str>) {
         let start = Instant::now();
         if chapters.is_empty() { println!("  无章节"); return; }
         fs::create_dir_all(&self.out_dir).expect("创建目录失败");
@@ -78,14 +78,19 @@ impl AudioDownloader {
             eprintln!("  [verbose] audio: {}章, {}线程, force={}, lrc={}, abr={}",
                 pending.len(), max_jobs, self.p.force, self.p.lrc_mode, self.p.abr);
         }
-        let failed = util::with_progress(pending, total, max_jobs, "green/cyan", move |ch, pb| {
-            let r = dl_one(&api, &od, ch, &p);
-            match &r {
-                Ok(_) => pb.set_message(format!("✓{:04}", ch.index)),
-                Err(e) => pb.set_message(format!("✗{:04}:{}", ch.index, e)),
+        let failed = util::with_progress_async(pending, total, max_jobs, "green/cyan", move |ch, pb| {
+            let api = api.clone();
+            let od = od.clone();
+            let p = p.clone();
+            async move {
+                let r = dl_one(&api, &od, &ch, &p).await;
+                match &r {
+                    Ok(_) => pb.set_message(format!("✓{:04}", ch.index)),
+                    Err(e) => pb.set_message(format!("✗{:04}:{}", ch.index, e)),
+                }
+                r
             }
-            r
-        });
+        }).await;
         println!("  完成 {}/{} (跳过 {})", total - failed - skipped, total, skipped);
         if failed > 0 { println!("  失败 {} 章", failed); }
 
@@ -117,7 +122,7 @@ impl AudioDownloader {
 
 // ── Download single chapter ─────────────────────────────────
 
-fn dl_one(api: &Client, out_dir: &Path, ch: &Chapter, p: &AudioParams) -> Result<(), String> {
+async fn dl_one(api: &Client, out_dir: &Path, ch: &Chapter, p: &AudioParams) -> Result<(), String> {
     let name = util::format_filename(&p.ft, ch);
     let path = out_dir.join(format!("{}.mp3", name));
 
@@ -125,7 +130,7 @@ fn dl_one(api: &Client, out_dir: &Path, ch: &Chapter, p: &AudioParams) -> Result
     if !p.force && path.exists() {
         let lrc_path = path.with_extension("lrc");
         if p.lrc_mode != "off" && !lrc_path.exists() {
-            let content = api.fetch_content(&ch.item_id).ok();
+            let content = api.fetch_content(&ch.item_id).await.ok();
             handle_lrc(&path, ch, &p.lrc_mode, p.verbose, content.as_deref());
         }
         return Ok(());
@@ -137,12 +142,12 @@ fn dl_one(api: &Client, out_dir: &Path, ch: &Chapter, p: &AudioParams) -> Result
         let mut all_tones_force = vec![p.tone];
         all_tones_force.extend(p.fallbacks.iter().filter(|&&t| t != p.tone));
         for &t in &all_tones_force {
-            if let Ok(audio_url) = api.fetch_audio_url(&ch.item_id, t) {
-                if let Ok(resp) = minreq::get(&audio_url).with_timeout(30).send() {
-                    let new_size = resp.as_bytes().len() as u64;
+            if let Ok(audio_url) = api.fetch_audio_url(&ch.item_id, t).await {
+                if let Ok(resp) = api.reqwest_client.get(&audio_url).send().await {
+                    let new_size = resp.content_length().unwrap_or(0);
                     if new_size == old_size && new_size > 1000 {
                         if p.verbose { eprintln!("  {:04} {} 不变 ✓", ch.index, ch.title); }
-                        let content = api.fetch_content(&ch.item_id).ok();
+                        let content = api.fetch_content(&ch.item_id).await.ok();
                         handle_lrc(&path, ch, &p.lrc_mode, p.verbose, content.as_deref());
                         return Ok(());
                     }
@@ -157,14 +162,14 @@ fn dl_one(api: &Client, out_dir: &Path, ch: &Chapter, p: &AudioParams) -> Result
 
     let mut last_err = String::new();
     for &t in &all_tones {
-        let audio_url = match api.fetch_audio_url(&ch.item_id, t) {
+        let audio_url = match api.fetch_audio_url(&ch.item_id, t).await {
             Ok(u) => u,
             Err(e) => { last_err = e; continue; }
         };
         match download_file(&audio_url, &path, p.verbose) {
             Ok(_) => {
                 post_process(&path, p.abr, p.speed, p.normalize, &p.post_cmd, p.verbose);
-                let content = api.fetch_content(&ch.item_id).ok();
+                let content = api.fetch_content(&ch.item_id).await.ok();
                 handle_lrc(&path, ch, &p.lrc_mode, p.verbose, content.as_deref());
                 return Ok(());
             }
@@ -202,10 +207,7 @@ fn download_file(url: &str, path: &PathBuf, verbose: bool) -> Result<(), String>
         }
     }
 
-    let resp = minreq::get(url).with_timeout(120).send().map_err(|e| format!("请求失败: {}", e))?;
-    let data = resp.as_bytes().to_vec();
-    if data.len() < 1000 { return Err(format!("文件太小: {}b", data.len())); }
-    fs::write(path, &data).map_err(|e| format!("写入: {}", e))
+    Err(format!("下载失败: curl 和 grun 均失败 ({})", &url[..url.len().min(80)]))
 }
 
 // ── Post-processing ─────────────────────────────────────────

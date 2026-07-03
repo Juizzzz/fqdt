@@ -2,12 +2,12 @@ use crate::api::Client;
 use crate::types::{ChapterRange, Config};
 use crate::util;
 
-pub fn run(book_id: &str, range: Option<&str>, show: bool, verbose: bool, cfg: &Config) {
+pub async fn run(book_id: &str, range: Option<&str>, show: bool, verbose: bool, cfg: &Config) {
     let vb = verbose || cfg.verbose;
     let api = Client::from_config(cfg, vb);
 
     // 获取书籍详情
-    let detail = api.fetch_detail(book_id).ok();
+    let detail = api.fetch_detail(book_id).await.ok();
     if let Some(d) = &detail {
         let parts: Vec<&str> = d.splitn(3, '|').collect();
         let title = parts.first().unwrap_or(&"");
@@ -23,7 +23,7 @@ pub fn run(book_id: &str, range: Option<&str>, show: bool, verbose: bool, cfg: &
 
     print!("  获取目录... ");
     flush();
-    let chs = match api.fetch_catalog(book_id) {
+    let chs = match api.fetch_catalog(book_id).await {
         Ok(c) => c,
         Err(e) => {
             eprintln!("\n  err {}", e);
@@ -39,7 +39,7 @@ pub fn run(book_id: &str, range: Option<&str>, show: bool, verbose: bool, cfg: &
     if show {
         for c in &v {
             println!("\n  \x1b[1;36m{:04} {}\x1b[0m", c.index, c.title);
-            match api.fetch_content(&c.item_id) {
+            match api.fetch_content(&c.item_id).await {
                 Ok(text) => {
                     for line in text.lines().take(40) {
                         println!("  {}", line);

@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 #[allow(clippy::too_many_arguments)]
-pub fn run(book_id: Option<&str>, output: Option<&str>, concurrent: Option<usize>,
+pub async fn run(book_id: Option<&str>, output: Option<&str>, concurrent: Option<usize>,
            range: Option<&str>, force: bool, audio: bool, verbose: bool,
            _interval: u64, cfg: &Config) {
     let path = match book_id {
@@ -20,14 +20,14 @@ pub fn run(book_id: Option<&str>, output: Option<&str>, concurrent: Option<usize
     let vb = verbose || cfg.verbose;
 
     if path.is_dir() {
-        return update_dir(&path, range, force, audio, vb, cfg, concurrent);
+        return update_dir(&path, range, force, audio, vb, cfg, concurrent).await;
     }
 
     let bid = book_id.unwrap();
     let api = Client::from_config(cfg, vb);
     print!("  获取目录... ");
     std::io::stdout().flush().unwrap();
-    let all = match api.fetch_catalog(bid) {
+    let all = match api.fetch_catalog(bid).await {
         Ok(c) => c,
         Err(e) => {
             eprintln!("\n  err {}", e);
@@ -45,7 +45,7 @@ pub fn run(book_id: Option<&str>, output: Option<&str>, concurrent: Option<usize
     let r = range.and_then(ChapterRange::parse);
 
     if audio {
-        update_audio(&all, &out_dir, r.as_ref(), force, vb, cfg);
+        update_audio(&all, &out_dir, r.as_ref(), force, vb, cfg).await;
         return;
     }
 
@@ -79,10 +79,10 @@ pub fn run(book_id: Option<&str>, output: Option<&str>, concurrent: Option<usize
     let dler = download::Downloader::new(
         api, out_dir, &cfg.format, &cfg.filename_template, force, vb, bid, "小说",
     );
-    dler.run(&new_chs, concurrent.unwrap_or(cfg.concurrent));
+    dler.run(&new_chs, concurrent.unwrap_or(cfg.concurrent)).await;
 }
 
-fn update_dir(path: &std::path::Path, range: Option<&str>, force: bool, audio: bool,
+async fn update_dir(path: &std::path::Path, range: Option<&str>, force: bool, audio: bool,
               vb: bool, cfg: &Config, concurrent: Option<usize>) {
     if audio {
         let audio_dir = path.join("Audio");
@@ -100,16 +100,16 @@ fn update_dir(path: &std::path::Path, range: Option<&str>, force: bool, audio: b
         let api = Client::from_config(cfg, vb);
         print!("  获取目录... ");
         std::io::stdout().flush().unwrap();
-        let all = match api.fetch_catalog(&bid) {
+        let all = match api.fetch_catalog(&bid).await {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("\n  err {}", e);
                 return;
             }
         };
+
         let r = range.and_then(ChapterRange::parse);
-        let new_chs: Vec<&crate::types::Chapter> = all
-            .iter()
+        let new_chs: Vec<&crate::types::Chapter> = all.iter()
             .filter(|c| !existing.iter().any(|(idx, _, _)| *idx == c.index))
             .filter(|c| r.as_ref().is_none_or(|x| x.contains(c.index)))
             .collect();
@@ -129,7 +129,7 @@ fn update_dir(path: &std::path::Path, range: Option<&str>, force: bool, audio: b
             abr: cfg.abr, speed: None, normalize: false,
             post_cmd: cfg.post_process.clone(), lrc_mode: "external".into(),
         });
-        dler.run(&new_chs, Some(&btitle));
+        dler.run(&new_chs, Some(&btitle)).await;
         return;
     }
 
@@ -143,7 +143,7 @@ fn update_dir(path: &std::path::Path, range: Option<&str>, force: bool, audio: b
     let api = Client::from_config(cfg, vb);
     print!("  获取目录... ");
     std::io::stdout().flush().unwrap();
-    let all = match api.fetch_catalog(&bid) {
+    let all = match api.fetch_catalog(&bid).await {
         Ok(c) => c,
         Err(e) => {
             eprintln!("\n  err {}", e);
@@ -168,10 +168,10 @@ fn update_dir(path: &std::path::Path, range: Option<&str>, force: bool, audio: b
     let dler = download::Downloader::new(
         api, path.to_path_buf(), &fmt, &cfg.filename_template, force, vb, &bid, &btitle,
     );
-    dler.run(&new_chs, concurrent.unwrap_or(cfg.concurrent));
+    dler.run(&new_chs, concurrent.unwrap_or(cfg.concurrent)).await;
 }
 
-fn update_audio(all: &[crate::types::Chapter], out_dir: &std::path::Path,
+async fn update_audio(all: &[crate::types::Chapter], out_dir: &std::path::Path,
                 range: Option<&ChapterRange>, force: bool, vb: bool, cfg: &Config) {
     let audio_dir = out_dir.join("Audio");
     let mut max_existing = 0usize;
@@ -215,5 +215,5 @@ fn update_audio(all: &[crate::types::Chapter], out_dir: &std::path::Path,
             post_cmd: cfg.post_process.clone(), lrc_mode: "external".into(),
         },
     );
-    dler.run(&new_chs, None);
+    dler.run(&new_chs, None).await;
 }

@@ -5,7 +5,8 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-minreq = { version = "2", features = ["https-rustls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 indicatif = "0.17"

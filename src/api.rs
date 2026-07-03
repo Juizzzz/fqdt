@@ -20,9 +20,7 @@ pub struct Client {
     pub detail_url: String,
     pub audio_content_urls: Vec<String>,
     pub verbose: bool,
-    pub timeout: u64,
-    pub http_method: String,
-    pub curl_args: String,
+    pub reqwest_client: reqwest::Client,
     pub source_stats: Arc<Mutex<HashMap<String, SourceStats>>>,
 }
 
@@ -43,19 +41,17 @@ impl SourceStats {
     }
 }
 
-/// 根据成功率排序 URL 列表（最优排前），失败 URL 自动降级
 fn sort_urls(urls: &[String], stats: &HashMap<String, SourceStats>) -> Vec<String> {
     let mut scored: Vec<(f64, &String)> = urls.iter()
         .map(|u| {
             let s = stats.get(u).cloned().unwrap_or_default();
-            (-s.score(), u)  // 负值 = 升序排列
+            (-s.score(), u)
         })
         .collect();
     scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     scored.iter().map(|(_, u)| (*u).clone()).collect()
 }
 
-/// 全局请求计数器，每 500 次重置统计（自适应网络变化）
 fn maybe_reset_stats(stats: &Arc<Mutex<HashMap<String, SourceStats>>>, counter: &AtomicU64) {
     let c = counter.fetch_add(1, Ordering::Relaxed);
     if c > 0 && c.is_multiple_of(500) {
@@ -70,9 +66,17 @@ impl Client {
     pub fn new(cache_dir: PathBuf, cache_enabled: bool, cache_ttl: u64,
                search_urls: Vec<String>, catalog_url: String, content_urls: Vec<String>,
                batch_urls: Vec<String>, detail_url: String,
-               audio_content_urls: Vec<String>, verbose: bool, timeout: u64,
-               http_method: String, curl_args: String) -> Self {
-        Client { cache_dir, cache_enabled, cache_ttl, search_urls, catalog_url, content_urls, batch_urls, detail_url, audio_content_urls, verbose, timeout, http_method, curl_args, source_stats: Arc::new(Mutex::new(HashMap::new())) }
+               audio_content_urls: Vec<String>, verbose: bool) -> Self {
+        Client {
+            cache_dir, cache_enabled, cache_ttl, search_urls, catalog_url,
+            content_urls, batch_urls, detail_url, audio_content_urls,
+            verbose,
+            reqwest_client: reqwest::Client::builder()
+                .user_agent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
+                .timeout(std::time::Duration::from_secs(15))
+                .build().unwrap(),
+            source_stats: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     pub fn from_config(cfg: &crate::types::Config, verbose: bool) -> Self {
@@ -80,17 +84,15 @@ impl Client {
             cfg.cache_dir.clone(), cfg.cache_enabled, cfg.cache_ttl,
             cfg.search_urls.clone(), cfg.catalog_url.clone(), cfg.content_urls.clone(),
             cfg.batch_urls.clone(), cfg.detail_url.clone(),
-            cfg.audio_content_urls.clone(), verbose, cfg.timeout,
-            cfg.http_method.clone(), cfg.curl_args.clone(),
+            cfg.audio_content_urls.clone(), verbose,
         )
     }
 
-    pub fn search(&self, keyword: &str, page: usize) -> Result<Vec<Book>, String> {
+    pub async fn search(&self, keyword: &str, page: usize) -> Result<Vec<Book>, String> {
         static REQ_COUNTER: AtomicU64 = AtomicU64::new(0);
         maybe_reset_stats(&self.source_stats, &REQ_COUNTER);
         let offset = (page.saturating_sub(1)) * 10;
         let kw = urlencode(keyword);
-
         let mut last_err = String::new();
         let sorted = {
             let stats = self.source_stats.lock().unwrap();
@@ -99,9 +101,9 @@ impl Client {
         for tmpl in &sorted {
             let url = tmpl.replacen("{}", &kw, 1).replacen("{}", &offset.to_string(), 1);
             let start = Instant::now();
-            let result = util::with_verbose(|| {
-                util::with_retry(|| self.http_get(&url), 2)
-            }, &format!("search {}", &url[..url.len().min(60)]), self.verbose);
+            let result = util::with_verbose_async(|| async {
+                util::with_retry_async(|| self.http_get(&url), 2).await
+            }, &format!("search {}", &url[..url.len().min(60)]), self.verbose).await;
             let elapsed = start.elapsed().as_millis() as u64;
             if let Ok(mut stats) = self.source_stats.lock() {
                 let entry = stats.entry(url.clone()).or_default();
@@ -153,11 +155,11 @@ impl Client {
         if books.is_empty() { Err("无结果".into()) } else { Ok(books) }
     }
 
-    pub fn fetch_catalog(&self, book_id: &str) -> Result<Vec<Chapter>, String> {
+    pub async fn fetch_catalog(&self, book_id: &str) -> Result<Vec<Chapter>, String> {
         let url = self.catalog_url.replacen("{}", book_id, 1);
-        let text = util::with_verbose(|| {
-            util::with_retry(|| self.get_cached(&url, book_id), 3)
-        }, &format!("catalog {}", book_id), self.verbose)?;
+        let text = util::with_verbose_async(|| async {
+            self.get_cached(&url, book_id).await
+        }, &format!("catalog {}", book_id), self.verbose).await?;
         let root: Value = serde_json::from_str(&text).map_err(|e| {
             if self.verbose { eprintln!("  [verbose] JSON解析失败: {}\n  原始响应:\n{}", e, text); }
             format!("JSON: {}", e)
@@ -182,7 +184,7 @@ impl Client {
         Ok(chapters)
     }
 
-    pub fn fetch_content(&self, item_id: &str) -> Result<String, String> {
+    pub async fn fetch_content(&self, item_id: &str) -> Result<String, String> {
         static REQ_COUNTER: AtomicU64 = AtomicU64::new(0);
         maybe_reset_stats(&self.source_stats, &REQ_COUNTER);
         let sorted = {
@@ -193,7 +195,7 @@ impl Client {
         for tmpl in &sorted {
             let url = tmpl.replacen("{}", item_id, 1);
             let start = Instant::now();
-            let result = self.fetch_content_from(&url, item_id);
+            let result = self.fetch_content_from(&url, item_id).await;
             let elapsed = start.elapsed().as_millis() as u64;
             if let Ok(mut stats) = self.source_stats.lock() {
                 let entry = stats.entry(url.clone()).or_default();
@@ -208,10 +210,10 @@ impl Client {
         Err(last_err)
     }
 
-    fn fetch_content_from(&self, url: &str, item_id: &str) -> Result<String, String> {
-        let raw = util::with_verbose(|| {
-            util::with_retry(|| self.http_get(url), 3)
-        }, &format!("content {}", &url[..url.len().min(60)]), self.verbose)?;
+    async fn fetch_content_from(&self, url: &str, item_id: &str) -> Result<String, String> {
+        let raw = util::with_verbose_async(|| async {
+            util::with_retry_async(|| self.http_get(url), 3).await
+        }, &format!("content {}", &url[..url.len().min(60)]), self.verbose).await?;
         let root: Value = serde_json::from_str(&raw).map_err(|e| {
             if self.verbose { eprintln!("  [verbose] JSON解析失败: {}\n  原始响应:\n{}", e, raw); }
             format!("JSON: {}", item_id)
@@ -224,8 +226,8 @@ impl Client {
         Ok(strip_html(content))
     }
 
-    fn get_cached(&self, url: &str, book_id: &str) -> Result<String, String> {
-        if !self.cache_enabled { return self.http_get(url); }
+    async fn get_cached(&self, url: &str, book_id: &str) -> Result<String, String> {
+        if !self.cache_enabled { return self.http_get(url).await; }
         let cp = self.cache_dir.join(format!("cat_{}.json", book_id));
         if cp.exists() {
             if let Ok(meta) = fs::metadata(&cp) {
@@ -237,64 +239,27 @@ impl Client {
                 }
             }
         }
-        let text = self.http_get(url)?;
+        let text = self.http_get(url).await?;
         if serde_json::from_str::<Value>(&text).is_ok() {
             fs::write(&cp, &text).ok();
         }
         Ok(text)
     }
 
-    pub fn http_get(&self, url: &str) -> Result<String, String> {
-        let to = self.timeout.max(5);
-        let use_minreq = self.http_method == "minreq" || (self.http_method != "curl");
-        let use_curl = self.http_method == "curl" || (self.http_method != "minreq");
-
-        if use_minreq {
-            if self.verbose { eprintln!("  [verbose] minreq GET {}", url); }
-            let resp = minreq::get(url)
-                .with_header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
-                .with_timeout(to)
-                .send()
-                .map_err(|e| format!("请求失败: {}", e))?;
-            let status = resp.status_code;
-            let text = resp.as_str().map_err(|e| format!("编码错误: {}", e))?.to_string();
-            if status == 200 { return Ok(text); }
-            if self.verbose { eprintln!("  [verbose] minreq {} {}b, status={}", url, text.len(), status); }
-            if self.http_method == "minreq" {
-                let snippet: String = text.chars().take(200).collect();
-                return Err(format!("HTTP {}: {}", status, snippet));
-            }
-        }
-
-        if use_curl {
-            if self.verbose { eprintln!("  [verbose] curl GET {}", url); }
-            let ct = to.to_string();
-            let mt = (to * 2).to_string();
-            let mut cmd = std::process::Command::new("curl");
-            cmd.args(["-sf", "--connect-timeout", &ct, "--max-time", &mt,
-                "-A", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36"]);
-            for arg in self.curl_args.split_whitespace() {
-                if !arg.is_empty() { cmd.arg(arg); }
-            }
-            cmd.arg(url);
-            let r = cmd.output();
-            if let Ok(out) = r {
-                if out.status.success() && !out.stdout.is_empty() {
-                    let ct = String::from_utf8(out.stdout).map_err(|e| format!("编码: {}", e))?;
-                    if self.verbose { eprintln!("  [verbose] OK curl ({}b)", ct.len()); }
-                    return Ok(ct);
-                }
-                if self.verbose {
-                    let stderr = String::from_utf8_lossy(&out.stderr);
-                    eprintln!("  [verbose] curl fail: status={}, err={}", out.status, stderr.trim());
-                }
-            }
-        }
-
-        Err(format!("HTTP 请求失败: {}", url))
+    pub async fn http_get(&self, url: &str) -> Result<String, String> {
+        if self.verbose { eprintln!("  [verbose] GET {}", url); }
+        let resp = self.reqwest_client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| format!("请求失败: {}", e))?;
+        let status = resp.status().as_u16();
+        let text = resp.text().await.map_err(|e| format!("读取响应: {}", e))?;
+        if status == 200 { return Ok(text); }
+        Err(format!("HTTP {}: {}..", status, &text[..text.len().min(200)]))
     }
 
-    pub fn fetch_audio_url(&self, item_id: &str, tone_id: usize) -> Result<String, String> {
+    pub async fn fetch_audio_url(&self, item_id: &str, tone_id: usize) -> Result<String, String> {
         static REQ_COUNTER: AtomicU64 = AtomicU64::new(0);
         maybe_reset_stats(&self.source_stats, &REQ_COUNTER);
         let sorted = {
@@ -305,10 +270,10 @@ impl Client {
         for tmpl in &sorted {
             let url = tmpl.replacen("{}", item_id, 1).replacen("{}", &tone_id.to_string(), 1);
             let start = Instant::now();
-            let result = self.fetch_audio_from(&url, item_id);
+            let result = self.fetch_audio_from(&url, item_id).await;
             let elapsed = start.elapsed().as_millis() as u64;
             if let Ok(mut stats) = self.source_stats.lock() {
-                let entry = stats.entry(url).or_default();
+                let entry = stats.entry(url.clone()).or_default();
                 match &result {
                     Ok(_) => { entry.ok_count += 1; entry.total_time_ms += elapsed; }
                     Err(_) => { entry.fail_count += 1; }
@@ -320,10 +285,10 @@ impl Client {
         Err(last_err)
     }
 
-    fn fetch_audio_from(&self, url: &str, item_id: &str) -> Result<String, String> {
-        let raw = util::with_verbose(|| {
-            util::with_retry(|| self.http_get(url), 2)
-        }, &format!("audio_url {}", &item_id[..item_id.len().min(16)]), self.verbose)?;
+    async fn fetch_audio_from(&self, url: &str, item_id: &str) -> Result<String, String> {
+        let raw = util::with_verbose_async(|| async {
+            util::with_retry_async(|| self.http_get(url), 2).await
+        }, &format!("audio_url {}", &item_id[..item_id.len().min(16)]), self.verbose).await?;
         let root: Value = serde_json::from_str(&raw).map_err(|e| {
             if self.verbose { eprintln!("  [verbose] JSON解析失败: {}\n  原始响应:\n{}", e, raw); }
             format!("JSON: {}", item_id)
@@ -337,11 +302,11 @@ impl Client {
         Err(if msg.is_empty() { "无可听音频".into() } else { msg.to_string() })
     }
 
-    pub fn fetch_detail(&self, book_id: &str) -> Result<String, String> {
+    pub async fn fetch_detail(&self, book_id: &str) -> Result<String, String> {
         let url = self.detail_url.replacen("{}", book_id, 1);
-        let raw = util::with_verbose(|| {
-            util::with_retry(|| self.http_get(&url), 2)
-        }, &format!("detail {}", book_id), self.verbose)?;
+        let raw = util::with_verbose_async(|| async {
+            util::with_retry_async(|| self.http_get(&url), 2).await
+        }, &format!("detail {}", book_id), self.verbose).await?;
         let root: Value = serde_json::from_str(&raw).map_err(|e| {
             if self.verbose { eprintln!("  [verbose] JSON: {}\n  {}", e, raw); }
             format!("JSON: {}", e)
@@ -356,7 +321,7 @@ impl Client {
         Ok(format!("{}|{}|{}", title, author, intro).trim_end_matches('|').to_string())
     }
 
-    pub fn fetch_content_batch(&self, book_id: &str, item_ids: &[&str]) -> Result<std::collections::HashMap<String, String>, String> {
+    pub async fn fetch_content_batch(&self, book_id: &str, item_ids: &[&str]) -> Result<HashMap<String, String>, String> {
         static REQ_COUNTER: AtomicU64 = AtomicU64::new(0);
         maybe_reset_stats(&self.source_stats, &REQ_COUNTER);
         let batch = item_ids.join(",");
@@ -368,15 +333,15 @@ impl Client {
         for tmpl in &sorted {
             let url = tmpl.replacen("{}", book_id, 1).replacen("{}", &batch, 1);
             let start = Instant::now();
-            let result = (|| -> Result<std::collections::HashMap<String, String>, String> {
-                let raw = util::with_verbose(|| {
-                    util::with_retry(|| self.http_get(&url), 2)
-                }, &format!("batch {} chapters", item_ids.len()), self.verbose)?;
+            let result = async {
+                let raw = util::with_verbose_async(|| async {
+                    util::with_retry_async(|| self.http_get(&url), 2).await
+                }, &format!("batch {} chapters", item_ids.len()), self.verbose).await?;
                 let root: Value = serde_json::from_str(&raw).map_err(|e| {
                     if self.verbose { eprintln!("  [verbose] JSON: {}\n  {}", e, raw); }
                     format!("JSON: {}", e)
                 })?;
-                let mut map = std::collections::HashMap::new();
+                let mut map = HashMap::new();
                 if let Some(arr) = root.pointer("/data").and_then(|v| v.as_array()) {
                     for item in arr {
                         let id = item["item_id"].as_str()
@@ -390,7 +355,7 @@ impl Client {
                 }
                 if !map.is_empty() { return Ok(map); }
                 Err("批量API未返回数据".into())
-            })();
+            }.await;
             let elapsed = start.elapsed().as_millis() as u64;
             if let Ok(mut stats) = self.source_stats.lock() {
                 let entry = stats.entry(url).or_default();
@@ -425,7 +390,6 @@ pub fn strip_html(s: &str) -> String {
     let mut ent = false;
     let mut buf = String::new();
     let mut is_close = false;
-
     for c in s.chars() {
         if tag {
             if c == '>' {

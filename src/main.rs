@@ -22,10 +22,6 @@ struct Cli {
     content_url: Option<String>,
     #[arg(long, global = true, help = "超时秒")]
     timeout: Option<u64>,
-    #[arg(long, global = true, help = "HTTP auto/minreq/curl")]
-    http: Option<String>,
-    #[arg(long, global = true, help = "curl 参数")]
-    curl_args: Option<String>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -233,7 +229,8 @@ enum Cmd {
     Custom(Vec<String>),
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
     let mut cfg = Config::load();
     cfg.apply_cli_overrides(
@@ -242,37 +239,35 @@ fn main() {
         cli.content_url.as_deref(),
     );
     if let Some(to) = cli.timeout { cfg.timeout = to; }
-    if let Some(h) = cli.http { cfg.http_method = h; }
-    if let Some(c) = cli.curl_args { cfg.curl_args = c; }
     cfg.ensure_dirs();
     Config::save_default().ok();
 
     match cli.cmd {
         Cmd::Search { keyword, page, auto, dry_run, output, jobs, range, format, interval, verbose } =>
             workflow::search::run(&keyword, page, output.as_deref(), jobs, range.as_deref(),
-                format.as_deref(), verbose, auto, dry_run, interval, &cfg),
+                format.as_deref(), verbose, auto, dry_run, interval, &cfg).await,
         Cmd::Info { book_id, range, show, verbose } =>
-            workflow::info::run(&book_id, range.as_deref(), show, verbose, &cfg),
+            workflow::info::run(&book_id, range.as_deref(), show, verbose, &cfg).await,
         Cmd::Get { target, output, range, format, jobs, force, verbose, audio, audio_only, tone, lrc, update, tts, voice, abr, speed, normalize, exec, interval } =>
-            dispatch_get(target, output, range, format, jobs, force, verbose, audio, audio_only, tone, lrc, update, tts, &voice, abr, speed, normalize, exec, interval, &cfg),
-        Cmd::Shelf { add, delete, dl, update } => workflow::shelf::run(add, delete, dl, update, &cfg),
+            dispatch_get(target, output, range, format, jobs, force, verbose, audio, audio_only, tone, lrc, update, tts, &voice, abr, speed, normalize, exec, interval, &cfg).await,
+        Cmd::Shelf { add, delete, dl, update } => workflow::shelf::run(add, delete, dl, update, &cfg).await,
         Cmd::Init => { Config::save_default().ok(); println!("  ok ~/.config/fqdt/config.ini"); }
-        Cmd::Function { args } => run_function(args, &cfg),
+        Cmd::Function { args } => run_function(args, &cfg).await,
         Cmd::Download { book_id, output, jobs, range, format, audio, tone, abr, lrc, force, verbose, interval } => {
             eprintln!("  \x1b[2m提示: 改用 fqdt get {} [--audio] [选项...]\x1b[0m", book_id);
-            dispatch_get(Some(book_id), output, range, format, jobs, force, verbose, audio, false, tone.unwrap_or(1), lrc, false, None, "zh-CN-XiaoxiaoNeural", abr, None, false, None, interval, &cfg);
+            dispatch_get(Some(book_id), output, range, format, jobs, force, verbose, audio, false, tone.unwrap_or(1), lrc, false, None, "zh-CN-XiaoxiaoNeural", abr, None, false, None, interval, &cfg).await;
         }
         Cmd::Update { book_id, output, jobs, range, force, audio, verbose, interval } => {
             if let Some(ref bid) = book_id { eprintln!("  \x1b[2m提示: 改用 fqdt get {} --update [选项...]\x1b[0m", bid); }
-            dispatch_get(book_id, output, range, None, jobs, force, verbose, audio, false, 1, None, true, None, "zh-CN-XiaoxiaoNeural", None, None, false, None, interval, &cfg);
+            dispatch_get(book_id, output, range, None, jobs, force, verbose, audio, false, 1, None, true, None, "zh-CN-XiaoxiaoNeural", None, None, false, None, interval, &cfg).await;
         }
         Cmd::Audio { book_id, output, range, tone, tts, voice, rate: _, volume: _, pitch: _, abr, speed, normalize, exec, lrc, force, jobs, verbose, interval } => {
             if let Some(ref bid) = book_id { eprintln!("  \x1b[2m提示: 改用 fqdt get {} --audio-only [选项...]\x1b[0m", bid); }
             if tts.is_some() { eprintln!("  \x1b[2m提示: 改用 fqdt get --tts <path> [选项...]\x1b[0m"); }
             let voice = voice.as_deref().unwrap_or("zh-CN-XiaoxiaoNeural");
-            dispatch_get(book_id, output, range, None, jobs, force, verbose, false, true, tone.unwrap_or(1), lrc, false, tts, voice, abr, speed, normalize, exec, interval, &cfg);
+            dispatch_get(book_id, output, range, None, jobs, force, verbose, false, true, tone.unwrap_or(1), lrc, false, tts, voice, abr, speed, normalize, exec, interval, &cfg).await;
         }
-        Cmd::TestApi => test_api(&cfg),
+        Cmd::TestApi => test_api(&cfg).await,
         Cmd::Custom(args) => dispatch_custom(args, &cfg),
     }
 }
@@ -308,7 +303,7 @@ fn dispatch_custom(args: Vec<String>, cfg: &Config) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn dispatch_get(target: Option<String>, output: Option<String>, range: Option<String>,
+async fn dispatch_get(target: Option<String>, output: Option<String>, range: Option<String>,
                 format: Option<String>, jobs: Option<usize>, force: bool, verbose: bool,
                 audio: bool, audio_only: bool, tone: usize, lrc: Option<String>,
                 update: bool, tts: Option<String>, voice: &str,
@@ -322,7 +317,7 @@ fn dispatch_get(target: Option<String>, output: Option<String>, range: Option<St
     // TTS 模式
     if let Some(tts_path) = tts {
         workflow::audio::run_tts(&tts_path, output.as_deref(), voice, cfg.tts_rate.as_str(),
-            cfg.tts_volume.as_str(), cfg.tts_pitch.as_str(), abr_val, speed, normalize, post_cmd, lrc_mode, vb);
+            cfg.tts_volume.as_str(), cfg.tts_pitch.as_str(), abr_val, speed, normalize, post_cmd, lrc_mode, vb).await;
         return;
     }
 
@@ -338,7 +333,7 @@ fn dispatch_get(target: Option<String>, output: Option<String>, range: Option<St
             output: None, range, format, concurrent: jobs, audio: audio || audio_only,
             tone, abr: abr_val, lrc: lrc_mode.into(), force, verbose: vb, book_title: None,
         };
-        workflow::download::run_dir(target_path, &p, vb, cfg);
+        workflow::download::run_dir(target_path, &p, vb, cfg).await;
         return;
     }
 
@@ -351,13 +346,13 @@ fn dispatch_get(target: Option<String>, output: Option<String>, range: Option<St
         let out = output
             .map(|s| std::path::PathBuf::from(s).join("Audio"))
             .unwrap_or_else(|| cfg.output_dir.join("Audio"));
-        workflow::download::fetch_and_dl_audio(&target, &out, &range, tone_val, abr_val, lrc_mode, force, &fallbacks, vb, cfg);
+        workflow::download::fetch_and_dl_audio(&target, &out, &range, tone_val, abr_val, lrc_mode, force, &fallbacks, vb, cfg).await;
         return;
     }
 
     // 增量更新
     if update {
-        workflow::update::run(Some(&target), output.as_deref(), jobs, range.as_deref(), force, audio, vb, interval, cfg);
+        workflow::update::run(Some(&target), output.as_deref(), jobs, range.as_deref(), force, audio, vb, interval, cfg).await;
         return;
     }
 
@@ -366,14 +361,14 @@ fn dispatch_get(target: Option<String>, output: Option<String>, range: Option<St
         output, range, format, concurrent: jobs, audio, tone, abr: abr_val,
         lrc: lrc_mode.into(), force, verbose: vb, book_title: None,
     };
-    workflow::download::run(&target, &p, cfg);
+    workflow::download::run(&target, &p, cfg).await;
 }
 
-fn test_api(cfg: &Config) {
-    fn test(api: &api::Client, label: &str, url: &str, desc: &str) {
+async fn test_api(cfg: &Config) {
+    async fn test(api: &api::Client, label: &str, url: &str, desc: &str) {
         print!("  {} {} ... ", label, desc);
         flush();
-        match api.http_get(url) {
+        match api.http_get(url).await {
             Ok(text) if !text.is_empty() => {
                 let snippet: String = text.chars().take(120).collect();
                 println!("\x1b[32m✓\x1b[0m {}b", text.len());
@@ -393,23 +388,23 @@ fn test_api(cfg: &Config) {
     println!("  ── 搜索 ──");
     for tmpl in &cfg.search_urls {
         let url = tmpl.replacen("{}", "凡人", 1).replacen("{}", "0", 1);
-        test(&api, "", &url, "search?q=凡人");
+        test(&api, "", &url, "search?q=凡人").await;
     }
 
     println!("\n  ── 目录 ──");
     let url = cfg.catalog_url.replacen("{}", "7481975434217786393", 1);
-    test(&api, "", &url, "catalog?bookId=...");
+    test(&api, "", &url, "catalog?bookId=...").await;
 
     println!("\n  ── 内容 ──");
     for tmpl in &cfg.content_urls {
         let url = tmpl.replacen("{}", "7481975434217786393", 1);
-        test(&api, "", &url, "content?item_id=...");
+        test(&api, "", &url, "content?item_id=...").await;
     }
 
     println!();
 }
 
-fn run_function(args: Vec<String>, cfg: &Config) {
+async fn run_function(args: Vec<String>, cfg: &Config) {
     if args.is_empty() {
         eprintln!("  err 需要函数名或管道\n  用法:\n  \
             fqdt function embed <file> [--lrc] [--cover <img>]\n  \
@@ -434,7 +429,7 @@ fn run_function(args: Vec<String>, cfg: &Config) {
         .filter(|(_, s)| *s == ";").map(|(i, _)| i).collect();
 
     if sep_positions.is_empty() {
-        let out = dispatch_one(&args, cfg, "");
+        let out = dispatch_one(&args, cfg, "").await;
         if !out.is_empty() { println!("{}", out); }
     } else {
         let mut segments: Vec<&[String]> = vec![];
@@ -455,7 +450,7 @@ fn run_function(args: Vec<String>, cfg: &Config) {
             let resolved: Vec<String> = seg.iter()
                 .map(|a| a.replace("{}", &piped))
                 .collect();
-            piped = dispatch_one(&resolved, cfg, &piped);
+            piped = dispatch_one(&resolved, cfg, &piped).await;
             if !piped.is_empty() {
                 println!("{}", piped);
             }
@@ -463,7 +458,7 @@ fn run_function(args: Vec<String>, cfg: &Config) {
     }
 }
 
-fn dispatch_one(args: &[String], cfg: &Config, piped: &str) -> String {
+async fn dispatch_one(args: &[String], cfg: &Config, piped: &str) -> String {
     fn err(e: String) -> String { eprintln!("  err {}", e); String::new() }
 
     if args.is_empty() { return String::new(); }
@@ -492,7 +487,7 @@ fn dispatch_one(args: &[String], cfg: &Config, piped: &str) -> String {
         "fetch-catalog" | "cat" => {
             if rest.is_empty() { return err("需要 book_id".into()); }
             let api = api::Client::from_config(cfg, cfg.verbose);
-            match api.fetch_catalog(rest[0]) {
+            match api.fetch_catalog(rest[0]).await {
                 Ok(chs) => {
                     let json = serde_json::to_string_pretty(&chs).unwrap_or_default();
                     println!("{}", json);
@@ -504,7 +499,7 @@ fn dispatch_one(args: &[String], cfg: &Config, piped: &str) -> String {
         "fetch-content" | "content" => {
             if rest.is_empty() { return err("需要 item_id".into()); }
             let api = api::Client::from_config(cfg, cfg.verbose);
-            match api.fetch_content(rest[0]) {
+            match api.fetch_content(rest[0]).await {
                 Ok(text) => { println!("{}", text); text }
                 Err(e) => err(e)
             }
@@ -513,7 +508,7 @@ fn dispatch_one(args: &[String], cfg: &Config, piped: &str) -> String {
             if rest.is_empty() { return err("需要 item_id".into()); }
             let tone: usize = rest.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
             let api = api::Client::from_config(cfg, cfg.verbose);
-            match api.fetch_audio_url(rest[0], tone) {
+            match api.fetch_audio_url(rest[0], tone).await {
                 Ok(url) => { println!("{}", url); url }
                 Err(e) => err(e)
             }
@@ -524,7 +519,7 @@ fn dispatch_one(args: &[String], cfg: &Config, piped: &str) -> String {
             let page: usize = rest.iter().position(|a| *a == "-p" || *a == "--page")
                 .and_then(|i| rest.get(i+1).and_then(|s| s.parse().ok())).unwrap_or(1);
             let api = api::Client::from_config(cfg, cfg.verbose);
-            match api.search(&keyword, page) {
+            match api.search(&keyword, page).await {
                 Ok(books) => {
                     let json = serde_json::to_string_pretty(&books).unwrap_or_default();
                     println!("{}", json);
@@ -605,7 +600,7 @@ fn dispatch_one(args: &[String], cfg: &Config, piped: &str) -> String {
         "fetch-detail" | "detail" => {
             if rest.is_empty() { return err("需要 book_id".into()); }
             let api = api::Client::from_config(cfg, cfg.verbose);
-            match api.fetch_detail(rest[0]) {
+            match api.fetch_detail(rest[0]).await {
                 Ok(info) => { println!("  {}", info); info }
                 Err(e) => err(e)
             }
@@ -614,7 +609,7 @@ fn dispatch_one(args: &[String], cfg: &Config, piped: &str) -> String {
             if rest.len() < 2 { return err("需要 book_id 和 item_ids".into()); }
             let item_ids: Vec<&str> = rest[1..].to_vec();
             let api = api::Client::from_config(cfg, cfg.verbose);
-            match api.fetch_content_batch(rest[0], &item_ids) {
+            match api.fetch_content_batch(rest[0], &item_ids).await {
                 Ok(map) => {
                     for (id, content) in &map {
                         println!("  [{}]\n{}\n", id, content);

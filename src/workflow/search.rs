@@ -5,7 +5,7 @@ use std::io::Write;
 use std::time::Instant;
 
 #[allow(clippy::too_many_arguments)]
-pub fn run(keyword: &str, page: usize, output: Option<&str>, concurrent: Option<usize>,
+pub async fn run(keyword: &str, page: usize, output: Option<&str>, concurrent: Option<usize>,
            range: Option<&str>, format: Option<&str>, verbose: bool, auto: Option<usize>,
            no_download: bool, _interval: u64, cfg: &Config) {
     let start = Instant::now();
@@ -14,7 +14,7 @@ pub fn run(keyword: &str, page: usize, output: Option<&str>, concurrent: Option<
 
     print!("  搜索 \"{}\" (第{}页)... ", keyword, page);
     std::io::stdout().flush().unwrap();
-    let books = match api.search(keyword, page) {
+    let books = match api.search(keyword, page).await {
         Ok(b) => b,
         Err(e) => {
             eprintln!("\n  err {}", e);
@@ -110,5 +110,5 @@ pub fn run(keyword: &str, page: usize, output: Option<&str>, concurrent: Option<
             lrc: "external".into(), force: false,
             verbose: vb, book_title: Some(book.title.clone()),
         }, cfg,
-    );
+    ).await;
 }

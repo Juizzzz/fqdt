@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 /// TTS 转换入口（从 get 命令调用）
 #[allow(clippy::too_many_arguments)]
-pub fn run_tts(path: &str, output: Option<&str>, voice: &str, rate: &str, volume: &str, pitch: &str,
+pub async fn run_tts(path: &str, output: Option<&str>, voice: &str, rate: &str, volume: &str, pitch: &str,
                abr: u32, speed: Option<f32>, normalize: bool, cmd: &str, lrc_mode: &str, vb: bool) {
     let p = std::path::Path::new(path);
     let params = audio::TtsParams {
@@ -20,7 +20,7 @@ pub fn run_tts(path: &str, output: Option<&str>, voice: &str, rate: &str, volume
 }
 
 #[allow(clippy::too_many_arguments, dead_code)]
-pub fn run(book_id: Option<&str>, output: Option<&str>, range: Option<&str>, tone: usize,
+pub async fn run(book_id: Option<&str>, output: Option<&str>, range: Option<&str>, tone: usize,
            verbose: bool, tts_path: Option<&str>, voice: &str,
            rate: Option<String>, volume: Option<String>, pitch: Option<String>,
            abr: Option<u32>, speed: Option<f32>, normalize: bool,
@@ -66,13 +66,13 @@ pub fn run(book_id: Option<&str>, output: Option<&str>, range: Option<&str>, ton
     };
 
     if std::path::Path::new(bid).is_dir() {
-        return run_dir(std::path::Path::new(bid), range, tone, abr_val, speed, normalize, post_cmd, lrc_mode, force, vb, cfg);
+        return run_dir(std::path::Path::new(bid), range, tone, abr_val, speed, normalize, post_cmd, lrc_mode, force, vb, cfg).await;
     }
 
     let api = Client::from_config(cfg, vb);
     print!("  获取目录... ");
     std::io::stdout().flush().unwrap();
-    let all = match api.fetch_catalog(bid) {
+    let all = match api.fetch_catalog(bid).await {
         Ok(c) => c,
         Err(e) => {
             eprintln!("\n  err {}", e);
@@ -93,11 +93,11 @@ pub fn run(book_id: Option<&str>, output: Option<&str>, range: Option<&str>, ton
             p.push("Audio");
             p
         });
-    run_download(&chs, &api, &out, tone, &cfg.audio_tone_fallbacks, abr_val, speed, normalize, post_cmd, lrc_mode, force, &cfg.filename_template, vb);
+    run_download(&chs, &api, &out, tone, &cfg.audio_tone_fallbacks, abr_val, speed, normalize, post_cmd, lrc_mode, force, &cfg.filename_template, vb).await;
 }
 
 #[allow(clippy::too_many_arguments, dead_code)]
-fn run_dir(path: &std::path::Path, range: Option<&str>, tone: usize, abr: u32, speed: Option<f32>,
+async fn run_dir(path: &std::path::Path, range: Option<&str>, tone: usize, abr: u32, speed: Option<f32>,
            normalize: bool, post_cmd: &str, lrc_mode: &str, force: bool, vb: bool, cfg: &Config) {
     use crate::download;
 
@@ -122,7 +122,7 @@ fn run_dir(path: &std::path::Path, range: Option<&str>, tone: usize, abr: u32, s
     let api = Client::from_config(cfg, vb);
     print!("  获取目录... ");
     std::io::stdout().flush().unwrap();
-    let all = match api.fetch_catalog(&bid) {
+    let all = match api.fetch_catalog(&bid).await {
         Ok(c) => c,
         Err(e) => { eprintln!("\n  err {}", e); return; }
     };
@@ -144,11 +144,11 @@ fn run_dir(path: &std::path::Path, range: Option<&str>, tone: usize, abr: u32, s
     } else {
         cfg.audio_tone_fallbacks.clone()
     };
-    run_download(&new_chs, &api, &audio_dir, tone, &fallbacks, abr, speed, normalize, post_cmd, lrc_mode, force, &cfg.filename_template, vb);
+    run_download(&new_chs, &api, &audio_dir, tone, &fallbacks, abr, speed, normalize, post_cmd, lrc_mode, force, &cfg.filename_template, vb).await;
 }
 
 #[allow(clippy::too_many_arguments, dead_code)]
-fn run_download(chs: &[&crate::types::Chapter], api: &Client, out: &std::path::Path,
+async fn run_download(chs: &[&crate::types::Chapter], api: &Client, out: &std::path::Path,
                 tone: usize, fallbacks: &[usize], abr: u32, speed: Option<f32>,
                 normalize: bool, post_cmd: &str, lrc_mode: &str, force: bool, ft: &str, vb: bool) {
     let fb = if fallbacks.is_empty() {
@@ -164,5 +164,5 @@ fn run_download(chs: &[&crate::types::Chapter], api: &Client, out: &std::path::P
             post_cmd: post_cmd.to_string(), lrc_mode: lrc_mode.to_string(),
         },
     );
-    dler.run(chs, None);
+    dler.run(chs, None).await;
 }

@@ -28,18 +28,18 @@ impl Downloader {
             book_id: book_id.into(), book_title: book_title.into() }
     }
 
-    pub fn run(&self, chapters: &[&Chapter], concurrent: usize) {
+    pub async fn run(&self, chapters: &[&Chapter], concurrent: usize) {
         if chapters.is_empty() { println!("  无章节"); return; }
         fs::create_dir_all(&self.out_dir).expect("创建目录失败");
         if self.format == "epub" {
-            self.do_epub(chapters, concurrent);
+            self.do_epub(chapters, concurrent).await;
         } else {
-            self.do_files(chapters, concurrent);
+            self.do_files(chapters, concurrent).await;
         }
         self.write_info_list(chapters);
     }
 
-    fn do_files(&self, chapters: &[&Chapter], concurrent: usize) {
+    async fn do_files(&self, chapters: &[&Chapter], concurrent: usize) {
         let total = chapters.len();
         let pending: Vec<Chapter> = chapters.iter()
             .filter(|c| self.force || !self.out_dir.join(self.fname(c)).exists())
@@ -58,21 +58,28 @@ impl Downloader {
         let bid = self.book_id.clone();
 
         // 尝试批量获取，失败则逐章获取
-        let batch_map = api.fetch_content_batch(&bid, &pending.iter().map(|c| c.item_id.as_str()).collect::<Vec<&str>>()).ok();
+        let item_ids: Vec<&str> = pending.iter().map(|c| c.item_id.as_str()).collect();
+        let batch_map = api.fetch_content_batch(&bid, &item_ids).await.ok();
 
-        let failed = util::with_progress(pending, total, concurrent, "cyan/blue", move |ch, pb| {
-            let r = dl_file_batch(&api, &out_dir, &ft, ch, vb, &batch_map);
-            match &r {
-                Ok(_) => pb.set_message(format!("✓{:04}", ch.index)),
-                Err(e) => pb.set_message(format!("✗{:04}:{}", ch.index, e)),
+        let failed = util::with_progress_async(pending, total, concurrent, "cyan/blue", move |ch, pb| {
+            let api = api.clone();
+            let out_dir = out_dir.clone();
+            let ft = ft.clone();
+            let batch_map = batch_map.clone();
+            async move {
+                let r = dl_file_batch(&api, &out_dir, &ft, &ch, vb, &batch_map).await;
+                match &r {
+                    Ok(_) => pb.set_message(format!("✓{:04}", ch.index)),
+                    Err(e) => pb.set_message(format!("✗{:04}:{}", ch.index, e)),
+                }
+                r
             }
-            r
-        });
+        }).await;
         println!("  ok {}/{} (跳过 {})", total - failed - skipped, total, skipped);
         if failed > 0 { println!("  失败 {} 章", failed); }
     }
 
-    fn do_epub(&self, chapters: &[&Chapter], concurrent: usize) {
+    async fn do_epub(&self, chapters: &[&Chapter], concurrent: usize) {
         let title = sanitize_filename(&self.book_title);
         let epub_path = self.out_dir.join(format!("{}.epub", title));
         let resolved: Vec<Chapter> = chapters.iter().map(|c| (*c).clone()).collect();
@@ -87,24 +94,28 @@ impl Downloader {
         let ep = epub_path.clone();
         let vb = self.verbose;
 
-        let failed = util::with_progress(resolved, total, concurrent, "cyan/blue", move |ch, pb| {
-            match api.fetch_content(&ch.item_id) {
-                Ok(text) => {
-                    if let Err(e) = epub::update_chapter(&ep, ch, &text) {
+        let failed = util::with_progress_async(resolved, total, concurrent, "cyan/blue", move |ch, pb| {
+            let api = api.clone();
+            let ep = ep.clone();
+            async move {
+                match api.fetch_content(&ch.item_id).await {
+                    Ok(text) => {
+                        if let Err(e) = epub::update_chapter(&ep, &ch, &text) {
+                            pb.set_message(format!("✗{:04}:{}", ch.index, e));
+                            Err(e)
+                        } else {
+                            pb.set_message(format!("✓{:04}", ch.index));
+                            if vb { eprintln!("  {:04} {} ✓", ch.index, ch.title); }
+                            Ok(())
+                        }
+                    }
+                    Err(e) => {
                         pb.set_message(format!("✗{:04}:{}", ch.index, e));
                         Err(e)
-                    } else {
-                        pb.set_message(format!("✓{:04}", ch.index));
-                        if vb { eprintln!("  {:04} {} ✓", ch.index, ch.title); }
-                        Ok(())
                     }
                 }
-                Err(e) => {
-                    pb.set_message(format!("✗{:04}:{}", ch.index, e));
-                    Err(e)
-                }
             }
-        });
+        }).await;
         let done = total - failed;
         println!("  完成 {}/{} → {}", done, total, epub_path.display());
         if failed > 0 { println!("  失败 {} 章", failed); }
@@ -115,13 +126,12 @@ impl Downloader {
     }
 }
 
-fn dl_file_batch(api: &Client, out_dir: &Path, ft: &str, ch: &Chapter, verbose: bool,
+async fn dl_file_batch(api: &Client, out_dir: &Path, ft: &str, ch: &Chapter, verbose: bool,
                  batch_map: &Option<std::collections::HashMap<String, String>>) -> Result<(), String> {
-    let content = batch_map.as_ref()
-        .and_then(|m| m.get(&ch.item_id))
-        .cloned()
-        .map(Ok)
-        .unwrap_or_else(|| api.fetch_content(&ch.item_id))?;
+    let content = match batch_map.as_ref().and_then(|m| m.get(&ch.item_id)) {
+        Some(c) => c.clone(),
+        None => api.fetch_content(&ch.item_id).await?,
+    };
     write_chapter(out_dir, ft, ch, &content, verbose)
 }
 

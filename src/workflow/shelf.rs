@@ -2,7 +2,7 @@ use crate::config;
 use crate::types;
 use crate::types::Config;
 
-pub fn run(add: Option<String>, delete: Option<usize>, dl: Option<usize>, update: bool, cfg: &Config) {
+pub async fn run(add: Option<String>, delete: Option<usize>, dl: Option<usize>, update: bool, cfg: &Config) {
     if update {
         let books = config::load_bookmarks();
         if books.is_empty() {
@@ -17,7 +17,7 @@ pub fn run(add: Option<String>, delete: Option<usize>, dl: Option<usize>, update
                 audio: false, tone: 1, abr: 0,
                 lrc: "external".into(), force: false,
                 verbose: false, book_title: Some(title.clone()),
-            }, cfg);
+            }, cfg).await;
             println!();
         }
         return;
@@ -52,7 +52,7 @@ pub fn run(add: Option<String>, delete: Option<usize>, dl: Option<usize>, update
             audio: false, tone: 1, abr: 0,
             lrc: "external".into(), force: false,
             verbose: false, book_title: Some(title.clone()),
-        }, cfg);
+        }, cfg).await;
         return;
     }
     let books = config::load_bookmarks();

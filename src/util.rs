@@ -2,7 +2,6 @@ use crate::types::{sanitize_filename, Chapter};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 pub fn has_chapter_prefix(title: &str) -> bool {
@@ -47,18 +46,19 @@ pub fn json_esc(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-pub fn with_retry<T>(
-    f: impl Fn() -> Result<T, String>,
-    max: u32,
-) -> Result<T, String> {
+pub async fn with_retry_async<F, Fut, T>(f: F, max: u32) -> Result<T, String>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<T, String>>,
+{
     let mut last_err = String::new();
     for i in 0..max {
-        match f() {
+        match f().await {
             Ok(v) => return Ok(v),
             Err(e) => {
                 last_err = e;
                 if i + 1 < max {
-                    thread::sleep(Duration::from_secs(1 << i));
+                    tokio::time::sleep(Duration::from_secs(1 << i)).await;
                 }
             }
         }
@@ -66,27 +66,33 @@ pub fn with_retry<T>(
     Err(format!("重试{}次后失败: {}", max, last_err))
 }
 
-pub fn with_verbose<T>(f: impl FnOnce() -> T, label: &str, enabled: bool) -> T {
+pub async fn with_verbose_async<F, Fut, T>(f: F, label: &str, enabled: bool) -> T
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = T>,
+{
     if enabled {
         eprintln!("  [verbose] {} 开始", label);
     }
-    let result = f();
+    let result = f().await;
     if enabled {
         eprintln!("  [verbose] {} 完成", label);
     }
     result
 }
 
-pub fn with_progress<T, U>(
+pub async fn with_progress_async<T, U, F, Fut>(
     items: Vec<T>,
     total: usize,
     concurrent: usize,
     colors: &str,
-    work: impl Fn(&T, &ProgressBar) -> Result<U, String> + Send + Sync + 'static,
+    work: F,
 ) -> usize
 where
-    T: Send + Sync + 'static,
+    T: Send + 'static,
     U: Send + 'static,
+    F: Fn(T, ProgressBar) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Result<U, String>> + Send,
 {
     if items.is_empty() {
         return 0;
@@ -98,35 +104,29 @@ where
     let skipped = total - items.len();
     pb.inc(skipped as u64);
 
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrent.max(1)));
     let failed = Arc::new(AtomicUsize::new(0));
-    let items = Arc::new(items);
     let work = Arc::new(work);
-    let n = items.len();
-    let count = concurrent.max(1);
-    let mut handles = vec![];
+    let mut handles = Vec::with_capacity(items.len());
 
-    for w in 0..count {
-        let items = items.clone();
+    for item in items {
+        let permit = semaphore.clone().acquire_owned().await.unwrap();
         let pb = pb.clone();
         let fl = failed.clone();
         let work = work.clone();
 
-        handles.push(thread::spawn(move || {
-            for i in (w..n).step_by(count) {
-                let item = &items[i];
-                match work(item, &pb) {
-                    Ok(_) => {}
-                    Err(_) => {
-                        fl.fetch_add(1, Ordering::SeqCst);
-                    }
-                }
-                pb.inc(1);
+        handles.push(tokio::spawn(async move {
+            let _permit = permit;
+            let result = work(item, pb.clone()).await;
+            if result.is_err() {
+                fl.fetch_add(1, Ordering::SeqCst);
             }
+            pb.inc(1);
         }));
     }
 
     for h in handles {
-        h.join().unwrap();
+        h.await.unwrap();
     }
 
     pb.finish_and_clear();
