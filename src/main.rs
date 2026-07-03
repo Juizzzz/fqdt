@@ -61,14 +61,10 @@ enum Cmd {
         #[arg(short='v', long, help = "详细输出")]
         verbose: bool,
     },
-    /// 统一下载命令：正文/音频/增量/TTS
-    ///
-    /// 默认下载正文。加 --audio 同时下载音频，--audio-only 仅音频，--update 增量更新。
-    /// 目录作为参数时自动进入增量模式。--tts 转换文本为语音。
-    #[command(alias = "g")]
-    Get {
-        /// 书籍 ID 或本地目录
-        target: Option<String>,
+    /// 下载正文（简写 d）
+    #[command(alias = "d")]
+    Download {
+        book_id: String,
         #[arg(short='o', long, help = "输出目录")]
         output: Option<String>,
         #[arg(short='r', long, help = "章节范围 (1-50 / -5 / 10-)")]
@@ -81,40 +77,55 @@ enum Cmd {
         force: bool,
         #[arg(short='v', long, help = "详细输出")]
         verbose: bool,
-
-        // 音频选项
-        #[arg(long, help = "同时下载音频")]
-        audio: bool,
-        #[arg(long, help = "仅下载音频，不下载正文")]
-        audio_only: bool,
+        #[arg(short='i', long, default_value = "0", help = "请求间隔(ms)")]
+        interval: u64,
+    },
+    /// 下载语音（简写 a）
+    #[command(alias = "a")]
+    Audio {
+        book_id: String,
+        #[arg(short='o', long, help = "输出目录")]
+        output: Option<String>,
+        #[arg(short='r', long, help = "章节范围 (1-50 / -5 / 10-)")]
+        range: Option<String>,
         #[arg(long, default_value = "1", help = "音色编号")]
         tone: usize,
         #[arg(long, help = "歌词模式: external/embed/both/off (默认 external)")]
         lrc: Option<String>,
-
-        // 增量更新
-        #[arg(long, help = "增量更新模式")]
-        update: bool,
-
-        // TTS
-        #[arg(long, help = "TTS 文本文件或目录路径")]
-        tts: Option<String>,
-        #[arg(long, default_value = "zh-CN-XiaoxiaoNeural", help = "TTS 语音")]
-        voice: String,
-
-        // 压缩/后处理 (可同时用于音频和 TTS)
-        #[arg(long, help = "MP3 压缩码率 (0=跳过)")]
-        abr: Option<u32>,
-        #[arg(long, help = "变速播放 (0.5=半速, 2.0=双倍)")]
-        speed: Option<f32>,
-        #[arg(long, help = "归一化音量")]
-        normalize: bool,
-        #[arg(short='e', long, help = "后处理命令模板 ({input} {output})")]
-        exec: Option<String>,
-
-        // 高级
+        #[arg(short='j', long, help = "并发数")]
+        jobs: Option<usize>,
+        #[arg(short='f', long, help = "强制覆盖已存在文件")]
+        force: bool,
+        #[arg(short='v', long, help = "详细输出")]
+        verbose: bool,
         #[arg(short='i', long, default_value = "0", help = "请求间隔(ms)")]
         interval: u64,
+    },
+    /// 增量更新已下载的书籍（简写 u）
+    #[command(alias = "u")]
+    Update {
+        target: String,
+        #[arg(short='o', long, help = "输出目录")]
+        output: Option<String>,
+        #[arg(short='j', long, help = "并发数")]
+        jobs: Option<usize>,
+        #[arg(short='f', long, help = "强制覆盖已存在文件")]
+        force: bool,
+        #[arg(short='v', long, help = "详细输出")]
+        verbose: bool,
+        #[arg(short='i', long, default_value = "0", help = "请求间隔(ms)")]
+        interval: u64,
+    },
+    /// 文本转语音（简写 t）
+    #[command(alias = "t")]
+    Tts {
+        path: String,
+        #[arg(long, default_value = "zh-CN-XiaoxiaoNeural", help = "TTS 语音")]
+        voice: String,
+        #[arg(short='j', long, help = "并发数")]
+        jobs: Option<usize>,
+        #[arg(short='v', long, help = "详细输出")]
+        verbose: bool,
     },
     /// 书架管理（简写 s）
     #[command(alias = "s")]
@@ -136,94 +147,23 @@ enum Cmd {
         #[arg(allow_hyphen_values = true, trailing_var_arg = true)]
         args: Vec<String>,
     },
-    /// [兼容] 下载章节正文（新用法: fqdt get <id>）
+    /// [兼容] 统一下载命令
     #[command(hide = true)]
-    Download {
-        book_id: String,
-        #[arg(short='o', long)]
-        output: Option<String>,
-        #[arg(short='j', long)]
-        jobs: Option<usize>,
-        #[arg(short='r', long)]
-        range: Option<String>,
-        #[arg(short='t', long)]
-        format: Option<String>,
-        #[arg(long)]
-        audio: bool,
-        #[arg(long)]
-        tone: Option<usize>,
-        #[arg(long)]
-        abr: Option<u32>,
-        #[arg(long)]
-        lrc: Option<String>,
-        #[arg(short='f', long)]
-        force: bool,
-        #[arg(short='v', long)]
-        verbose: bool,
-        #[arg(short='i', long)]
-        interval: u64,
+    Get {
+        target: Option<String>,
+        #[arg(short='o', long)] output: Option<String>,
+        #[arg(short='r', long)] range: Option<String>,
+        #[arg(short='t', long)] format: Option<String>,
+        #[arg(short='j', long)] jobs: Option<usize>,
+        #[arg(short='f', long)] force: bool,
+        #[arg(short='v', long)] verbose: bool,
+        #[arg(long)] audio: bool,
+        #[arg(long)] audio_only: bool,
+        #[arg(long, default_value = "1")] tone: usize,
+        #[arg(long)] lrc: Option<String>,
+        #[arg(long)] update: bool,
+        #[arg(short='i', long, default_value = "0")] interval: u64,
     },
-    /// [兼容] 增量更新（新用法: fqdt get <id> --update）
-    #[command(hide = true)]
-    Update {
-        book_id: Option<String>,
-        #[arg(short='o', long)]
-        output: Option<String>,
-        #[arg(short='j', long)]
-        jobs: Option<usize>,
-        #[arg(short='r', long)]
-        range: Option<String>,
-        #[arg(short='f', long)]
-        force: bool,
-        #[arg(long)]
-        audio: bool,
-        #[arg(short='v', long)]
-        verbose: bool,
-        #[arg(short='i', long)]
-        interval: u64,
-    },
-    /// [兼容] 下载语音或 TTS（新用法: fqdt get <id> --audio / --tts）
-    #[command(hide = true)]
-    Audio {
-        book_id: Option<String>,
-        #[arg(short='o', long)]
-        output: Option<String>,
-        #[arg(short='r', long)]
-        range: Option<String>,
-        #[arg(long)]
-        tone: Option<usize>,
-        #[arg(short='t', long)]
-        tts: Option<String>,
-        #[arg(long)]
-        voice: Option<String>,
-        #[arg(long)]
-        rate: Option<String>,
-        #[arg(long)]
-        volume: Option<String>,
-        #[arg(long)]
-        pitch: Option<String>,
-        #[arg(long)]
-        abr: Option<u32>,
-        #[arg(long)]
-        speed: Option<f32>,
-        #[arg(long)]
-        normalize: bool,
-        #[arg(short='e', long)]
-        exec: Option<String>,
-        #[arg(long)]
-        lrc: Option<String>,
-        #[arg(short='f', long)]
-        force: bool,
-        #[arg(short='j', long)]
-        jobs: Option<usize>,
-        #[arg(short='v', long)]
-        verbose: bool,
-        #[arg(short='i', long)]
-        interval: u64,
-    },
-    /// [兼容] 测试 API 连接
-    #[command(name = "test-api", hide = true)]
-    TestApi,
     /// 自定义命令（来自 config.ini [workflow_cmd]）
     #[command(external_subcommand)]
     Custom(Vec<String>),
@@ -248,33 +188,25 @@ async fn main() {
                 format.as_deref(), verbose, auto, dry_run, interval, &cfg).await,
         Cmd::Info { book_id, range, show, verbose } =>
             workflow::info::run(&book_id, range.as_deref(), show, verbose, &cfg).await,
-        Cmd::Get { target, output, range, format, jobs, force, verbose, audio, audio_only, tone, lrc, update, tts, voice, abr, speed, normalize, exec, interval } =>
-            dispatch_get(target, output, range, format, jobs, force, verbose, audio, audio_only, tone, lrc, update, tts, &voice, abr, speed, normalize, exec, interval, &cfg).await,
+        Cmd::Download { book_id, output, range, format, jobs, force, verbose, interval } =>
+            dispatch_download(book_id, output, range, format, jobs, force, verbose, interval, &cfg).await,
+        Cmd::Audio { book_id, output, range, tone, lrc, jobs, force, verbose, interval } =>
+            dispatch_audio(book_id, output, range, tone, lrc, jobs, force, verbose, interval, &cfg).await,
+        Cmd::Update { target, output, jobs, force, verbose, interval } =>
+            dispatch_update(target, output, jobs, force, verbose, interval, &cfg).await,
+        Cmd::Tts { path, voice, jobs, verbose } =>
+            dispatch_tts(path, &voice, jobs, verbose, &cfg).await,
+        Cmd::Get { target, output, range, format, jobs, force, verbose, audio, audio_only, tone, lrc, update, interval } =>
+            dispatch_get(target, output, range, format, jobs, force, verbose, audio, audio_only, tone, lrc, update, interval, &cfg).await,
         Cmd::Shelf { add, delete, dl, update } => workflow::shelf::run(add, delete, dl, update, &cfg).await,
         Cmd::Init => { Config::save_default().ok(); println!("  ok ~/.config/fqdt/config.ini"); }
         Cmd::Function { args } => run_function(args, &cfg).await,
-        Cmd::Download { book_id, output, jobs, range, format, audio, tone, abr, lrc, force, verbose, interval } => {
-            eprintln!("  \x1b[2m提示: 改用 fqdt get {} [--audio] [选项...]\x1b[0m", book_id);
-            dispatch_get(Some(book_id), output, range, format, jobs, force, verbose, audio, false, tone.unwrap_or(1), lrc, false, None, "zh-CN-XiaoxiaoNeural", abr, None, false, None, interval, &cfg).await;
-        }
-        Cmd::Update { book_id, output, jobs, range, force, audio, verbose, interval } => {
-            if let Some(ref bid) = book_id { eprintln!("  \x1b[2m提示: 改用 fqdt get {} --update [选项...]\x1b[0m", bid); }
-            dispatch_get(book_id, output, range, None, jobs, force, verbose, audio, false, 1, None, true, None, "zh-CN-XiaoxiaoNeural", None, None, false, None, interval, &cfg).await;
-        }
-        Cmd::Audio { book_id, output, range, tone, tts, voice, rate: _, volume: _, pitch: _, abr, speed, normalize, exec, lrc, force, jobs, verbose, interval } => {
-            if let Some(ref bid) = book_id { eprintln!("  \x1b[2m提示: 改用 fqdt get {} --audio-only [选项...]\x1b[0m", bid); }
-            if tts.is_some() { eprintln!("  \x1b[2m提示: 改用 fqdt get --tts <path> [选项...]\x1b[0m"); }
-            let voice = voice.as_deref().unwrap_or("zh-CN-XiaoxiaoNeural");
-            dispatch_get(book_id, output, range, None, jobs, force, verbose, false, true, tone.unwrap_or(1), lrc, false, tts, voice, abr, speed, normalize, exec, interval, &cfg).await;
-        }
-        Cmd::TestApi => test_api(&cfg).await,
         Cmd::Custom(args) => dispatch_custom(args, &cfg),
     }
 }
 
 fn dispatch_custom(args: Vec<String>, cfg: &Config) {
     let cmd = args.first().map(|s| s.as_str()).unwrap_or("");
-    // 从 config.ini [workflow_cmd] 查找自定义命令
     if let Some(template) = cfg.custom_commands.get(cmd) {
         let rest: Vec<&str> = args[1..].iter().map(|s| s.as_str()).collect();
         let cmd_str = if rest.is_empty() {
@@ -299,109 +231,98 @@ fn dispatch_custom(args: Vec<String>, cfg: &Config) {
         return;
     }
     eprintln!("  err 未知命令: {}", cmd);
-    eprintln!("  可用命令: search, info, get, shelf, init, function");
+    eprintln!("  可用命令: search, info, download, audio, update, tts, shelf, init, function");
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_download(book_id: String, output: Option<String>, range: Option<String>,
+    format: Option<String>, jobs: Option<usize>, force: bool, verbose: bool,
+    _interval: u64, cfg: &Config) {
+    let vb = verbose || cfg.verbose;
+    let p = types::DownloadParams {
+        output, range, format, concurrent: jobs,
+        audio: false, tone: 1, abr: cfg.abr,
+        lrc: "external".into(), force, verbose: vb, book_title: None,
+    };
+    workflow::download::run(&book_id, &p, cfg).await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_audio(book_id: String, output: Option<String>, range: Option<String>,
+    tone: usize, lrc: Option<String>, _jobs: Option<usize>, force: bool, verbose: bool,
+    _interval: u64, cfg: &Config) {
+    let vb = verbose || cfg.verbose;
+    let lrc_mode = lrc.as_deref().unwrap_or("external");
+    let path = Path::new(&book_id);
+
+    if path.is_dir() {
+        let p = types::DownloadParams {
+            output: None, range, format: None, concurrent: None,
+            audio: true, tone, abr: cfg.abr,
+            lrc: lrc_mode.into(), force, verbose: vb, book_title: None,
+        };
+        workflow::download::run_dir(path, &p, vb, cfg).await;
+        return;
+    }
+
+    let fallbacks = if cfg.audio_tone_fallbacks.is_empty() {
+        vec![2, 4, 5, 6, 74, 91]
+    } else { cfg.audio_tone_fallbacks.clone() };
+    let out = output
+        .map(|s| std::path::PathBuf::from(s).join("Audio"))
+        .unwrap_or_else(|| cfg.output_dir.join("Audio"));
+    workflow::download::fetch_and_dl_audio(&book_id, &out, &range, tone, cfg.abr, lrc_mode, force, &fallbacks, vb, cfg).await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_update(target: String, output: Option<String>, jobs: Option<usize>,
+    force: bool, verbose: bool, _interval: u64, cfg: &Config) {
+    let vb = verbose || cfg.verbose;
+    workflow::update::run(Some(&target), output.as_deref(), jobs, None, force, false, vb, _interval, cfg).await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_tts(path: String, voice: &str, _jobs: Option<usize>, verbose: bool, cfg: &Config) {
+    let vb = verbose || cfg.verbose;
+    workflow::audio::run_tts(&path, None, voice, &cfg.tts_rate, &cfg.tts_volume, &cfg.tts_pitch,
+        cfg.abr, None, false, "", "external", vb).await;
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_get(target: Option<String>, output: Option<String>, range: Option<String>,
-                format: Option<String>, jobs: Option<usize>, force: bool, verbose: bool,
-                audio: bool, audio_only: bool, tone: usize, lrc: Option<String>,
-                update: bool, tts: Option<String>, voice: &str,
-                abr: Option<u32>, speed: Option<f32>, normalize: bool,
-                exec: Option<String>, interval: u64, cfg: &Config) {
+    format: Option<String>, jobs: Option<usize>, force: bool, verbose: bool,
+    audio: bool, audio_only: bool, tone: usize, lrc: Option<String>,
+    update: bool, interval: u64, cfg: &Config) {
     let vb = verbose || cfg.verbose;
-    let lrc_mode = lrc.as_deref().unwrap_or("external");
-    let abr_val = abr.unwrap_or(cfg.abr);
-    let post_cmd = exec.as_deref().unwrap_or(&cfg.post_process);
-
-    // TTS 模式
-    if let Some(tts_path) = tts {
-        workflow::audio::run_tts(&tts_path, output.as_deref(), voice, cfg.tts_rate.as_str(),
-            cfg.tts_volume.as_str(), cfg.tts_pitch.as_str(), abr_val, speed, normalize, post_cmd, lrc_mode, vb).await;
-        return;
-    }
-
     let target = match target {
         Some(t) => t,
-        None => { eprintln!("  err 需要书籍 ID、目录、--tts 或 --audio-only"); return; }
+        None => { eprintln!("  err 需要书籍 ID、目录或 --audio-only"); return; }
     };
-    let target_path = Path::new(&target);
 
-    // 目录模式 = 增量更新
-    if target_path.is_dir() {
-        let p = types::DownloadParams {
-            output: None, range, format, concurrent: jobs, audio: audio || audio_only,
-            tone, abr: abr_val, lrc: lrc_mode.into(), force, verbose: vb, book_title: None,
-        };
-        workflow::download::run_dir(target_path, &p, vb, cfg).await;
+    if update {
+        workflow::update::run(Some(&target), output.as_deref(), jobs, range.as_deref(), force, audio, vb, interval, cfg).await;
         return;
     }
 
-    // 纯音频下载
     if audio_only {
-        let tone_val = tone;
+        let lrc_mode = lrc.as_deref().unwrap_or("external");
         let fallbacks = if cfg.audio_tone_fallbacks.is_empty() {
             vec![2, 4, 5, 6, 74, 91]
         } else { cfg.audio_tone_fallbacks.clone() };
         let out = output
             .map(|s| std::path::PathBuf::from(s).join("Audio"))
             .unwrap_or_else(|| cfg.output_dir.join("Audio"));
-        workflow::download::fetch_and_dl_audio(&target, &out, &range, tone_val, abr_val, lrc_mode, force, &fallbacks, vb, cfg).await;
+        workflow::download::fetch_and_dl_audio(&target, &out, &range, tone, cfg.abr, lrc_mode, force, &fallbacks, vb, cfg).await;
         return;
     }
 
-    // 增量更新
-    if update {
-        workflow::update::run(Some(&target), output.as_deref(), jobs, range.as_deref(), force, audio, vb, interval, cfg).await;
-        return;
-    }
-
-    // 默认：下载正文（可选带音频）
+    let lrc_mode = lrc.as_deref().unwrap_or("external");
     let p = types::DownloadParams {
-        output, range, format, concurrent: jobs, audio, tone, abr: abr_val,
+        output, range, format, concurrent: jobs,
+        audio, tone, abr: cfg.abr,
         lrc: lrc_mode.into(), force, verbose: vb, book_title: None,
     };
     workflow::download::run(&target, &p, cfg).await;
-}
-
-async fn test_api(cfg: &Config) {
-    async fn test(api: &api::Client, label: &str, url: &str, desc: &str) {
-        print!("  {} {} ... ", label, desc);
-        flush();
-        match api.http_get(url).await {
-            Ok(text) if !text.is_empty() => {
-                let snippet: String = text.chars().take(120).collect();
-                println!("\x1b[32m✓\x1b[0m {}b", text.len());
-                println!("    {}", snippet);
-            }
-            Ok(_) => println!("\x1b[33m⚠\x1b[0m 空响应"),
-            Err(e) => println!("\x1b[31m✗ {}\x1b[0m", e),
-        }
-    }
-
-    let mut api = api::Client::from_config(cfg, cfg.verbose);
-    api.cache_enabled = false;
-    api.cache_ttl = 0;
-
-    println!("\n  📡 API 测试\n");
-
-    println!("  ── 搜索 ──");
-    for tmpl in &cfg.search_urls {
-        let url = tmpl.replacen("{}", "凡人", 1).replacen("{}", "0", 1);
-        test(&api, "", &url, "search?q=凡人").await;
-    }
-
-    println!("\n  ── 目录 ──");
-    let url = cfg.catalog_url.replacen("{}", "7481975434217786393", 1);
-    test(&api, "", &url, "catalog?bookId=...").await;
-
-    println!("\n  ── 内容 ──");
-    for tmpl in &cfg.content_urls {
-        let url = tmpl.replacen("{}", "7481975434217786393", 1);
-        test(&api, "", &url, "content?item_id=...").await;
-    }
-
-    println!();
 }
 
 async fn run_function(args: Vec<String>, cfg: &Config) {
@@ -421,7 +342,17 @@ async fn run_function(args: Vec<String>, cfg: &Config) {
             fqdt function read-audio-info <dir>\n  \
             fqdt function save <file>\n  \
             fqdt function save <file> (管道末端保存输出)\n  \
-            fqdt function ... \\; ... \\; ...  (chaining with ;)");
+            fqdt function ... \\; ... \\; ...  (chaining with ;)\n  \
+            \n  主命令:\n  \
+            fqdt download <book_id> [选项]\n  \
+            fqdt audio <book_id> [选项]\n  \
+            fqdt update <book_id|目录> [选项]\n  \
+            fqdt tts <路径> [选项]\n  \
+            fqdt search <keyword> [选项]\n  \
+            fqdt info <book_id> [选项]\n  \
+            fqdt shelf [选项]\n  \
+            fqdt init\n  \
+            fqdt function <fn> [参数]");
         return;
     }
 
@@ -632,7 +563,3 @@ async fn dispatch_one(args: &[String], cfg: &Config, piped: &str) -> String {
     }
 }
 
-fn flush() {
-    use std::io::Write;
-    std::io::stdout().flush().unwrap();
-}

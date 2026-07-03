@@ -6,15 +6,16 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 
 #[derive(Clone)]
 pub struct Client {
     pub cache_dir: PathBuf,
     pub cache_enabled: bool,
+    #[allow(dead_code)]
     pub cache_ttl: u64,
     pub search_urls: Vec<String>,
-    pub catalog_url: String,
+    pub catalog_urls: Vec<String>,
     pub content_urls: Vec<String>,
     pub batch_urls: Vec<String>,
     pub detail_url: String,
@@ -64,11 +65,11 @@ fn maybe_reset_stats(stats: &Arc<Mutex<HashMap<String, SourceStats>>>, counter: 
 impl Client {
     #[allow(clippy::too_many_arguments)]
     pub fn new(cache_dir: PathBuf, cache_enabled: bool, cache_ttl: u64,
-               search_urls: Vec<String>, catalog_url: String, content_urls: Vec<String>,
+               search_urls: Vec<String>, catalog_urls: Vec<String>, content_urls: Vec<String>,
                batch_urls: Vec<String>, detail_url: String,
                audio_content_urls: Vec<String>, verbose: bool) -> Self {
         Client {
-            cache_dir, cache_enabled, cache_ttl, search_urls, catalog_url,
+            cache_dir, cache_enabled, cache_ttl, search_urls, catalog_urls,
             content_urls, batch_urls, detail_url, audio_content_urls,
             verbose,
             reqwest_client: reqwest::Client::builder()
@@ -82,7 +83,7 @@ impl Client {
     pub fn from_config(cfg: &crate::types::Config, verbose: bool) -> Self {
         Client::new(
             cfg.cache_dir.clone(), cfg.cache_enabled, cfg.cache_ttl,
-            cfg.search_urls.clone(), cfg.catalog_url.clone(), cfg.content_urls.clone(),
+            cfg.search_urls.clone(), cfg.catalog_urls.clone(), cfg.content_urls.clone(),
             cfg.batch_urls.clone(), cfg.detail_url.clone(),
             cfg.audio_content_urls.clone(), verbose,
         )
@@ -156,17 +157,34 @@ impl Client {
     }
 
     pub async fn fetch_catalog(&self, book_id: &str) -> Result<Vec<Chapter>, String> {
-        let url = self.catalog_url.replacen("{}", book_id, 1);
-        let text = util::with_verbose_async(|| async {
-            self.get_cached(&url, book_id).await
-        }, &format!("catalog {}", book_id), self.verbose).await?;
-        let root: Value = serde_json::from_str(&text).map_err(|e| {
+        let mut last_err = String::new();
+        for tmpl in &self.catalog_urls {
+            let url = tmpl.replacen("{}", book_id, 1);
+            let result = util::with_verbose_async(|| async {
+                util::with_retry_async(|| self.http_get(&url), 2).await
+            }, &format!("catalog {}", book_id), self.verbose).await;
+            match result {
+                Ok(text) => match self.parse_catalog(&text) {
+                    Ok(chs) if !chs.is_empty() => return Ok(chs),
+                    Ok(_) => { last_err = "空目录".into(); continue; }
+                    Err(e) => { last_err = e; continue; }
+                },
+                Err(e) => { last_err = e; continue; }
+            }
+        }
+        Err(last_err)
+    }
+
+    fn parse_catalog(&self, text: &str) -> Result<Vec<Chapter>, String> {
+        let root: Value = serde_json::from_str(text).map_err(|e| {
             if self.verbose { eprintln!("  [verbose] JSON解析失败: {}\n  原始响应:\n{}", e, text); }
             format!("JSON: {}", e)
         })?;
         let mut chapters = vec![];
-        let mut idx = 1;
+
+        // 官方 fanqienovel 格式: /data/chapterListWithVolume[{items:[{itemId,title}]}]
         if let Some(Value::Array(vlist)) = root.pointer("/data/chapterListWithVolume") {
+            let mut idx = 1;
             for vol in vlist {
                 if let Value::Array(items) = vol {
                     for item in items {
@@ -179,7 +197,17 @@ impl Client {
                     }
                 }
             }
+        // 第三方服务器格式: /data/lists[{item_id, title}]
+        } else if let Some(Value::Array(items)) = root.pointer("/data/lists") {
+            for (idx, item) in items.iter().enumerate() {
+                let item_id = item["item_id"].as_str().or_else(|| item["itemId"].as_str()).unwrap_or("").to_string();
+                let title = item["title"].as_str().unwrap_or("未知章节").to_string();
+                if !item_id.is_empty() {
+                    chapters.push(Chapter { index: idx + 1, item_id, title });
+                }
+            }
         }
+
         if chapters.is_empty() { return Err("未获取到章节".into()); }
         Ok(chapters)
     }
@@ -224,26 +252,6 @@ impl Client {
             fs::write(&cp, &raw).ok();
         }
         Ok(strip_html(content))
-    }
-
-    async fn get_cached(&self, url: &str, book_id: &str) -> Result<String, String> {
-        if !self.cache_enabled { return self.http_get(url).await; }
-        let cp = self.cache_dir.join(format!("cat_{}.json", book_id));
-        if cp.exists() {
-            if let Ok(meta) = fs::metadata(&cp) {
-                if let Ok(mtime) = meta.modified() {
-                    let age = SystemTime::now().duration_since(mtime).unwrap_or_default().as_secs();
-                    if age < self.cache_ttl {
-                        if let Ok(c) = fs::read_to_string(&cp) { return Ok(c); }
-                    }
-                }
-            }
-        }
-        let text = self.http_get(url).await?;
-        if serde_json::from_str::<Value>(&text).is_ok() {
-            fs::write(&cp, &text).ok();
-        }
-        Ok(text)
     }
 
     pub async fn http_get(&self, url: &str) -> Result<String, String> {

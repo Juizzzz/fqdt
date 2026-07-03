@@ -66,7 +66,7 @@ pub struct Config {
     pub cache_ttl: u64,
     pub bookmark_file: PathBuf,
     pub search_urls: Vec<String>,
-    pub catalog_url: String,
+    pub catalog_urls: Vec<String>,
     pub content_urls: Vec<String>,
     pub batch_urls: Vec<String>,
     pub audio_content_urls: Vec<String>,
@@ -115,11 +115,16 @@ impl Default for Config {
                 "https://novel.snssdk.com/api/novel/channel/homepage/search/search/v1/?aid=1967&q={}&offset={}".into(),
                 "http://101.35.133.34:5000/api/search?key={}&offset={}".into(),
             ],
-            catalog_url: "https://fanqienovel.com/api/reader/directory/detail?bookId={}".into(),
+            catalog_urls: vec![
+                "https://fanqienovel.com/api/reader/directory/detail?bookId={}".into(),
+                "http://101.35.133.34:5000/api/book?book_id={}".into(),
+                "http://101.35.133.34:5000/api/directory?book_id={}".into(),
+            ],
             content_urls: vec![
                 "http://101.35.133.34:5000/api/content?tab=小说&item_id={}".into(),
-                "https://tt.sjmyzq.cn/api/raw_full?item_id={}".into(),
+                "http://101.35.133.34:5000/api/chapter?item_id={}".into(),
                 "http://101.35.133.34:5000/api/raw_full?item_id={}".into(),
+                "https://tt.sjmyzq.cn/api/raw_full?item_id={}".into(),
             ],
             batch_urls: vec![
                 "http://101.35.133.34:5000/api/content?tab=批量&book_id={}&item_ids={}".into(),
@@ -160,6 +165,6 @@ pub fn sanitize_filename(s: &str) -> String {
 /// 根据主机 CPU 核心数自动选择并发上限（不超过 16）
 pub fn default_concurrent() -> usize {
     std::thread::available_parallelism()
-        .map(|n| n.get().min(16))
-        .unwrap_or(4)
+        .map(|n| (n.get() * 2).min(32))
+        .unwrap_or(8)
 }

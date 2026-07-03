@@ -22,7 +22,7 @@ impl Config {
                         continue;
                     }
                     match k {
-                        "concurrent" => cfg.concurrent = v.parse().unwrap_or(4),
+                        "concurrent" => { let n: usize = v.parse().unwrap_or(0); if n > 0 { cfg.concurrent = n; } }
                         "format" => cfg.format = v.into(),
                         "output_dir" => cfg.output_dir = PathBuf::from(v),
                         "filename_template" => cfg.filename_template = v.into(),
@@ -30,7 +30,7 @@ impl Config {
                         "cache_enabled" => cfg.cache_enabled = v != "false",
                         "cache_ttl" => cfg.cache_ttl = v.parse().unwrap_or(86400),
                         "search_url" => cfg.search_urls = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
-                        "catalog_url" => cfg.catalog_url = v.into(),
+                        "catalog_url" => cfg.catalog_urls = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
                         "content_url" => cfg.content_urls = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
                         "batch_url" => cfg.batch_urls = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
                         "detail_url" => cfg.detail_url = v.into(),
@@ -60,7 +60,8 @@ impl Config {
         let ini = "\
 # 番茄小说下载器配置
 [download]
-concurrent = 4
+# 并发数 (默认: CPU核心数*2, 最高32)
+concurrent = 0
 format = txt
 output_dir = .
 filename_template = {idx04}_{title}
@@ -74,9 +75,9 @@ cache_ttl = 86400
 # 搜索API(逗号分隔,从前往后尝试,{}会被关键词和页码替换)
 search_url = https://novel.snssdk.com/api/novel/channel/homepage/search/search/v1/?aid=1967&q={}&offset={},http://101.35.133.34:5000/api/search?key={}&offset={}
 # 目录API
-catalog_url = https://fanqienovel.com/api/reader/directory/detail?bookId={}
+catalog_url = https://fanqienovel.com/api/reader/directory/detail?bookId={},http://101.35.133.34:5000/api/book?book_id={},http://101.35.133.34:5000/api/directory?book_id={}
 # 内容API(逗号分隔,从前往后尝试,{}会被item_id替换)
-content_url = http://101.35.133.34:5000/api/content?tab=小说&item_id={},https://tt.sjmyzq.cn/api/raw_full?item_id={},http://101.35.133.34:5000/api/raw_full?item_id={}
+content_url = http://101.35.133.34:5000/api/content?tab=小说&item_id={},http://101.35.133.34:5000/api/chapter?item_id={},http://101.35.133.34:5000/api/raw_full?item_id={},https://tt.sjmyzq.cn/api/raw_full?item_id={}
 # 批量内容API({}会被book_id和item_ids(逗号分隔)替换)
 batch_url = http://101.35.133.34:5000/api/content?tab=批量&book_id={}&item_ids={}
 # 书籍详情API
@@ -105,7 +106,7 @@ post_process =
 
     pub fn apply_cli_overrides(&mut self, search_url: Option<&str>, catalog_url: Option<&str>, content_url: Option<&str>) {
         if let Some(v) = search_url { self.search_urls = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(); }
-        if let Some(v) = catalog_url { self.catalog_url = v.into(); }
+        if let Some(v) = catalog_url { self.catalog_urls = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(); }
         if let Some(v) = content_url { self.content_urls = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(); }
     }
 
