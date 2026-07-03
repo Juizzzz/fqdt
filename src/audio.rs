@@ -1,5 +1,5 @@
 use crate::api::Client;
-use crate::types::Chapter;
+use crate::types::{default_concurrent, Chapter};
 use crate::util;
 use indicatif::ProgressBar;
 use std::fs;
@@ -73,7 +73,12 @@ impl AudioDownloader {
         let od = self.out_dir.clone();
         let p = AudioParams { ..self.p.clone() };
 
-        let failed = util::with_progress(pending, total, 4, "green/cyan", move |ch, pb| {
+        let max_jobs = default_concurrent();
+        if self.p.verbose {
+            eprintln!("  [verbose] audio: {}章, {}线程, force={}, lrc={}, abr={}",
+                pending.len(), max_jobs, self.p.force, self.p.lrc_mode, self.p.abr);
+        }
+        let failed = util::with_progress(pending, total, max_jobs, "green/cyan", move |ch, pb| {
             let r = dl_one(&api, &od, ch, &p);
             match &r {
                 Ok(_) => pb.set_message(format!("✓{:04}", ch.index)),
@@ -381,7 +386,7 @@ pub fn convert_tts_dir(input: &Path, output_dir: Option<PathBuf>, params: &TtsPa
     if entries.is_empty() { println!("  无 .txt 文件"); return; }
 
     let pb = ProgressBar::new(entries.len() as u64);
-    pb.set_style(util::bar_style("magenta/cyan"));
+    pb.set_style(util::bar_style("magenta/cyan", 1));
 
     let mut failed = 0usize;
     for entry in &entries {

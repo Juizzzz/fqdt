@@ -34,10 +34,10 @@ pub fn filter_by_range<'a>(
         .collect()
 }
 
-pub fn bar_style(colors: &str) -> ProgressStyle {
+pub fn bar_style(colors: &str, concurrent: usize) -> ProgressStyle {
     ProgressStyle::default_bar()
         .template(&format!(
-            "[{{elapsed_precise}}] {{bar:28.{colors}}} {{pos}}/{{len}} {{msg}}"
+            "[{{elapsed_precise}}] {{bar:28.{colors}}} {{pos}}/{{len}} ({}j) {{msg}}", concurrent
         ))
         .unwrap()
         .progress_chars("━▶")
@@ -93,7 +93,7 @@ where
     }
 
     let pb = ProgressBar::new(total as u64);
-    pb.set_style(bar_style(colors));
+    pb.set_style(bar_style(colors, concurrent));
 
     let skipped = total - items.len();
     pb.inc(skipped as u64);

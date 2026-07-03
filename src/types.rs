@@ -104,7 +104,7 @@ impl Default for Config {
     fn default() -> Self {
         let home = get_home();
         Config {
-            concurrent: 4,
+            concurrent: default_concurrent(),
             format: "txt".into(),
             output_dir: PathBuf::from("."),
             filename_template: "{idx04}_{title}".into(),
@@ -159,4 +159,11 @@ pub fn sanitize_filename(s: &str) -> String {
         '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
         _ => c,
     }).collect()
+}
+
+/// 根据主机 CPU 核心数自动选择并发上限（不超过 16）
+pub fn default_concurrent() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get().min(16))
+        .unwrap_or(4)
 }
