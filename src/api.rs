@@ -1,9 +1,12 @@
 use crate::types::{Book, Chapter};
 use crate::util;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Instant, SystemTime};
 
 #[derive(Clone)]
 pub struct Client {
@@ -20,6 +23,46 @@ pub struct Client {
     pub timeout: u64,
     pub http_method: String,
     pub curl_args: String,
+    pub source_stats: Arc<Mutex<HashMap<String, SourceStats>>>,
+}
+
+#[derive(Clone, Default)]
+pub struct SourceStats {
+    pub ok_count: u32,
+    pub fail_count: u32,
+    pub total_time_ms: u64,
+}
+
+impl SourceStats {
+    fn score(&self) -> f64 {
+        let total = self.ok_count + self.fail_count;
+        if total == 0 { return 1.0; }
+        let rate = self.ok_count as f64 / total as f64;
+        let avg_time = if self.ok_count > 0 { self.total_time_ms as f64 / self.ok_count as f64 } else { 9999.0 };
+        rate * 100.0 - avg_time * 0.1
+    }
+}
+
+/// 根据成功率排序 URL 列表（最优排前），失败 URL 自动降级
+fn sort_urls(urls: &[String], stats: &HashMap<String, SourceStats>) -> Vec<String> {
+    let mut scored: Vec<(f64, &String)> = urls.iter()
+        .map(|u| {
+            let s = stats.get(u).cloned().unwrap_or_default();
+            (-s.score(), u)  // 负值 = 升序排列
+        })
+        .collect();
+    scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    scored.iter().map(|(_, u)| (*u).clone()).collect()
+}
+
+/// 全局请求计数器，每 500 次重置统计（自适应网络变化）
+fn maybe_reset_stats(stats: &Arc<Mutex<HashMap<String, SourceStats>>>, counter: &AtomicU64) {
+    let c = counter.fetch_add(1, Ordering::Relaxed);
+    if c > 0 && c.is_multiple_of(500) {
+        if let Ok(mut s) = stats.lock() {
+            s.clear();
+        }
+    }
 }
 
 impl Client {
@@ -29,7 +72,7 @@ impl Client {
                batch_urls: Vec<String>, detail_url: String,
                audio_content_urls: Vec<String>, verbose: bool, timeout: u64,
                http_method: String, curl_args: String) -> Self {
-        Client { cache_dir, cache_enabled, cache_ttl, search_urls, catalog_url, content_urls, batch_urls, detail_url, audio_content_urls, verbose, timeout, http_method, curl_args }
+        Client { cache_dir, cache_enabled, cache_ttl, search_urls, catalog_url, content_urls, batch_urls, detail_url, audio_content_urls, verbose, timeout, http_method, curl_args, source_stats: Arc::new(Mutex::new(HashMap::new())) }
     }
 
     pub fn from_config(cfg: &crate::types::Config, verbose: bool) -> Self {
@@ -43,15 +86,30 @@ impl Client {
     }
 
     pub fn search(&self, keyword: &str, page: usize) -> Result<Vec<Book>, String> {
+        static REQ_COUNTER: AtomicU64 = AtomicU64::new(0);
+        maybe_reset_stats(&self.source_stats, &REQ_COUNTER);
         let offset = (page.saturating_sub(1)) * 10;
         let kw = urlencode(keyword);
 
         let mut last_err = String::new();
-        for tmpl in &self.search_urls {
+        let sorted = {
+            let stats = self.source_stats.lock().unwrap();
+            sort_urls(&self.search_urls, &stats)
+        };
+        for tmpl in &sorted {
             let url = tmpl.replacen("{}", &kw, 1).replacen("{}", &offset.to_string(), 1);
+            let start = Instant::now();
             let result = util::with_verbose(|| {
                 util::with_retry(|| self.http_get(&url), 2)
             }, &format!("search {}", &url[..url.len().min(60)]), self.verbose);
+            let elapsed = start.elapsed().as_millis() as u64;
+            if let Ok(mut stats) = self.source_stats.lock() {
+                let entry = stats.entry(url.clone()).or_default();
+                match &result {
+                    Ok(_) => { entry.ok_count += 1; entry.total_time_ms += elapsed; }
+                    Err(_) => { entry.fail_count += 1; }
+                }
+            }
             match result {
                 Ok(text) => {
                     match Self::parse_search_results(&text, self.verbose) {
@@ -125,12 +183,27 @@ impl Client {
     }
 
     pub fn fetch_content(&self, item_id: &str) -> Result<String, String> {
+        static REQ_COUNTER: AtomicU64 = AtomicU64::new(0);
+        maybe_reset_stats(&self.source_stats, &REQ_COUNTER);
+        let sorted = {
+            let stats = self.source_stats.lock().unwrap();
+            sort_urls(&self.content_urls, &stats)
+        };
         let mut last_err = String::new();
-        for tmpl in &self.content_urls {
+        for tmpl in &sorted {
             let url = tmpl.replacen("{}", item_id, 1);
-            let content = self.fetch_content_from(&url, item_id);
-            if content.is_ok() { return content; }
-            last_err = content.unwrap_err();
+            let start = Instant::now();
+            let result = self.fetch_content_from(&url, item_id);
+            let elapsed = start.elapsed().as_millis() as u64;
+            if let Ok(mut stats) = self.source_stats.lock() {
+                let entry = stats.entry(url.clone()).or_default();
+                match &result {
+                    Ok(_) => { entry.ok_count += 1; entry.total_time_ms += elapsed; }
+                    Err(_) => { entry.fail_count += 1; }
+                }
+            }
+            if result.is_ok() { return result; }
+            last_err = result.unwrap_err();
         }
         Err(last_err)
     }
@@ -222,25 +295,46 @@ impl Client {
     }
 
     pub fn fetch_audio_url(&self, item_id: &str, tone_id: usize) -> Result<String, String> {
+        static REQ_COUNTER: AtomicU64 = AtomicU64::new(0);
+        maybe_reset_stats(&self.source_stats, &REQ_COUNTER);
+        let sorted = {
+            let stats = self.source_stats.lock().unwrap();
+            sort_urls(&self.audio_content_urls, &stats)
+        };
         let mut last_err = String::new();
-        for tmpl in &self.audio_content_urls {
+        for tmpl in &sorted {
             let url = tmpl.replacen("{}", item_id, 1).replacen("{}", &tone_id.to_string(), 1);
-            let raw = util::with_verbose(|| {
-                util::with_retry(|| self.http_get(&url), 2)
-            }, &format!("audio_url {}", &item_id[..item_id.len().min(16)]), self.verbose)?;
-            let root: Value = serde_json::from_str(&raw).map_err(|e| {
-                if self.verbose { eprintln!("  [verbose] JSON解析失败: {}\n  原始响应:\n{}", e, raw); }
-                format!("JSON: {}", item_id)
-            })?;
-            let audio_url = root.pointer("/data/content").and_then(|v| v.as_str()).unwrap_or("");
-            if !audio_url.is_empty() {
-                if self.verbose { eprintln!("  [verbose] audio URL: {}b", audio_url.len()); }
-                return Ok(audio_url.to_string());
+            let start = Instant::now();
+            let result = self.fetch_audio_from(&url, item_id);
+            let elapsed = start.elapsed().as_millis() as u64;
+            if let Ok(mut stats) = self.source_stats.lock() {
+                let entry = stats.entry(url).or_default();
+                match &result {
+                    Ok(_) => { entry.ok_count += 1; entry.total_time_ms += elapsed; }
+                    Err(_) => { entry.fail_count += 1; }
+                }
             }
-            let msg = root.pointer("/message").and_then(|v| v.as_str()).unwrap_or("");
-            last_err = if msg.is_empty() { "无可听音频".into() } else { msg.to_string() };
+            if result.is_ok() { return result; }
+            last_err = result.unwrap_err();
         }
         Err(last_err)
+    }
+
+    fn fetch_audio_from(&self, url: &str, item_id: &str) -> Result<String, String> {
+        let raw = util::with_verbose(|| {
+            util::with_retry(|| self.http_get(url), 2)
+        }, &format!("audio_url {}", &item_id[..item_id.len().min(16)]), self.verbose)?;
+        let root: Value = serde_json::from_str(&raw).map_err(|e| {
+            if self.verbose { eprintln!("  [verbose] JSON解析失败: {}\n  原始响应:\n{}", e, raw); }
+            format!("JSON: {}", item_id)
+        })?;
+        let audio_url = root.pointer("/data/content").and_then(|v| v.as_str()).unwrap_or("");
+        if !audio_url.is_empty() {
+            if self.verbose { eprintln!("  [verbose] audio URL: {}b", audio_url.len()); }
+            return Ok(audio_url.to_string());
+        }
+        let msg = root.pointer("/message").and_then(|v| v.as_str()).unwrap_or("");
+        Err(if msg.is_empty() { "无可听音频".into() } else { msg.to_string() })
     }
 
     pub fn fetch_detail(&self, book_id: &str) -> Result<String, String> {
@@ -263,31 +357,50 @@ impl Client {
     }
 
     pub fn fetch_content_batch(&self, book_id: &str, item_ids: &[&str]) -> Result<std::collections::HashMap<String, String>, String> {
+        static REQ_COUNTER: AtomicU64 = AtomicU64::new(0);
+        maybe_reset_stats(&self.source_stats, &REQ_COUNTER);
         let batch = item_ids.join(",");
+        let sorted = {
+            let stats = self.source_stats.lock().unwrap();
+            sort_urls(&self.batch_urls, &stats)
+        };
         let mut last_err = String::new();
-        for tmpl in &self.batch_urls {
+        for tmpl in &sorted {
             let url = tmpl.replacen("{}", book_id, 1).replacen("{}", &batch, 1);
-            let raw = util::with_verbose(|| {
-                util::with_retry(|| self.http_get(&url), 2)
-            }, &format!("batch {} chapters", item_ids.len()), self.verbose)?;
-            let root: Value = serde_json::from_str(&raw).map_err(|e| {
-                if self.verbose { eprintln!("  [verbose] JSON: {}\n  {}", e, raw); }
-                format!("JSON: {}", e)
-            })?;
-            let mut map = std::collections::HashMap::new();
-            if let Some(arr) = root.pointer("/data").and_then(|v| v.as_array()) {
-                for item in arr {
-                    let id = item["item_id"].as_str()
-                        .or_else(|| item["itemId"].as_str())
-                        .unwrap_or("");
-                    let content = item["content"].as_str().unwrap_or("");
-                    if !id.is_empty() && !content.is_empty() {
-                        map.insert(id.to_string(), strip_html(content));
+            let start = Instant::now();
+            let result = (|| -> Result<std::collections::HashMap<String, String>, String> {
+                let raw = util::with_verbose(|| {
+                    util::with_retry(|| self.http_get(&url), 2)
+                }, &format!("batch {} chapters", item_ids.len()), self.verbose)?;
+                let root: Value = serde_json::from_str(&raw).map_err(|e| {
+                    if self.verbose { eprintln!("  [verbose] JSON: {}\n  {}", e, raw); }
+                    format!("JSON: {}", e)
+                })?;
+                let mut map = std::collections::HashMap::new();
+                if let Some(arr) = root.pointer("/data").and_then(|v| v.as_array()) {
+                    for item in arr {
+                        let id = item["item_id"].as_str()
+                            .or_else(|| item["itemId"].as_str())
+                            .unwrap_or("");
+                        let content = item["content"].as_str().unwrap_or("");
+                        if !id.is_empty() && !content.is_empty() {
+                            map.insert(id.to_string(), strip_html(content));
+                        }
                     }
                 }
+                if !map.is_empty() { return Ok(map); }
+                Err("批量API未返回数据".into())
+            })();
+            let elapsed = start.elapsed().as_millis() as u64;
+            if let Ok(mut stats) = self.source_stats.lock() {
+                let entry = stats.entry(url).or_default();
+                match &result {
+                    Ok(_) => { entry.ok_count += 1; entry.total_time_ms += elapsed; }
+                    Err(_) => { entry.fail_count += 1; }
+                }
             }
-            if !map.is_empty() { return Ok(map); }
-            last_err = "批量API未返回数据".into();
+            if result.is_ok() { return result; }
+            last_err = result.unwrap_err();
         }
         Err(last_err)
     }
