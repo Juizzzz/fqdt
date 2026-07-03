@@ -129,6 +129,8 @@ enum Cmd {
         delete: Option<usize>,
         #[arg(short='D', long)]
         dl: Option<usize>,
+        #[arg(short='U', long)]
+        update: bool,
     },
     /// 生成默认配置
     Init,
@@ -253,7 +255,7 @@ fn main() {
             workflow::info::run(&book_id, range.as_deref(), show, verbose, &cfg),
         Cmd::Get { target, output, range, format, jobs, force, verbose, audio, audio_only, tone, lrc, update, tts, voice, abr, speed, normalize, exec, interval } =>
             dispatch_get(target, output, range, format, jobs, force, verbose, audio, audio_only, tone, lrc, update, tts, &voice, abr, speed, normalize, exec, interval, &cfg),
-        Cmd::Shelf { add, delete, dl } => workflow::shelf::run(add, delete, dl, &cfg),
+        Cmd::Shelf { add, delete, dl, update } => workflow::shelf::run(add, delete, dl, update, &cfg),
         Cmd::Init => { Config::save_default().ok(); println!("  ok ~/.config/fqdt/config.ini"); }
         Cmd::Function { args } => run_function(args, &cfg),
         Cmd::Download { book_id, output, jobs, range, format, audio, tone, abr, lrc, force, verbose, interval } => {
@@ -422,6 +424,8 @@ fn run_function(args: Vec<String>, cfg: &Config) {
             fqdt function embed-cover <file> <cover>\n  \
             fqdt function read-info <dir>\n  \
             fqdt function read-audio-info <dir>\n  \
+            fqdt function save <file>\n  \
+            fqdt function save <file> (管道末端保存输出)\n  \
             fqdt function ... \\; ... \\; ...  (chaining with ;)");
         return;
     }
@@ -459,7 +463,7 @@ fn run_function(args: Vec<String>, cfg: &Config) {
     }
 }
 
-fn dispatch_one(args: &[String], cfg: &Config, _piped: &str) -> String {
+fn dispatch_one(args: &[String], cfg: &Config, piped: &str) -> String {
     fn err(e: String) -> String { eprintln!("  err {}", e); String::new() }
 
     if args.is_empty() { return String::new(); }
@@ -619,6 +623,15 @@ fn dispatch_one(args: &[String], cfg: &Config, _piped: &str) -> String {
                 }
                 Err(e) => err(e)
             }
+        }
+        "save" => {
+            if rest.is_empty() { return err("需要输出路径".into()); }
+            let path = rest[0].to_string();
+            if let Err(e) = std::fs::write(&path, piped) {
+                return err(format!("写入失败: {}", e));
+            }
+            println!("  ok 保存 {} ({} 字节)", path, piped.len());
+            piped.to_string()
         }
         _ => err(format!("未知函数: {}", func))
     }

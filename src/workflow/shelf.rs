@@ -2,7 +2,26 @@ use crate::config;
 use crate::types;
 use crate::types::Config;
 
-pub fn run(add: Option<String>, delete: Option<usize>, dl: Option<usize>, cfg: &Config) {
+pub fn run(add: Option<String>, delete: Option<usize>, dl: Option<usize>, update: bool, cfg: &Config) {
+    if update {
+        let books = config::load_bookmarks();
+        if books.is_empty() {
+            println!("  书架为空");
+            return;
+        }
+        println!("  更新书架 ({} 本):\n", books.len());
+        for (i, (id, title)) in books.iter().enumerate() {
+            println!("  [{}/{}] \x1b[1;36m{}\x1b[0m", i + 1, books.len(), title);
+            super::download::run(id, &types::DownloadParams {
+                output: None, range: None, format: None, concurrent: None,
+                audio: false, tone: 1, abr: 0,
+                lrc: "external".into(), force: false,
+                verbose: false, book_title: Some(title.clone()),
+            }, cfg);
+            println!();
+        }
+        return;
+    }
     if let Some(id_title) = add {
         if let Some((id, title)) = id_title.split_once(':') {
             match config::add_bookmark(id, title) {
@@ -48,4 +67,5 @@ pub fn run(add: Option<String>, delete: Option<usize>, dl: Option<usize>, cfg: &
     println!("\n  添加: fqdt shelf -a <ID>:<标题>");
     println!("  删除: fqdt shelf -d <编号>");
     println!("  下载: fqdt shelf -D <编号>");
+    println!("  更新: fqdt shelf -U");
 }
