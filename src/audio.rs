@@ -61,10 +61,10 @@ impl AudioDownloader {
                 false
             })
             .map(|c| (*c).clone()).collect();
-        let skipped = total - pending.len();
+        let skip = total - pending.len();
 
         if pending.is_empty() {
-            println!("  全部已存在 ({}/{})", skipped, total);
+            println!("  全部已存在 ({}/{})", skip, total);
             self.write_info_list(chapters, book_title);
             return;
         }
@@ -74,11 +74,12 @@ impl AudioDownloader {
         let p = AudioParams { ..self.p.clone() };
 
         let max_jobs = default_concurrent();
+        let pending_n = pending.len();
         if self.p.verbose {
             eprintln!("  [verbose] audio: {}章, {}线程, force={}, lrc={}, abr={}",
-                pending.len(), max_jobs, self.p.force, self.p.lrc_mode, self.p.abr);
+                pending_n, max_jobs, self.p.force, self.p.lrc_mode, self.p.abr);
         }
-        let failed = util::with_progress_async(pending, total, max_jobs, "green/cyan", move |ch, pb| {
+        let (ok, fail) = util::with_progress_async(pending, total, max_jobs, "green/cyan", move |ch, pb| {
             let api = api.clone();
             let od = od.clone();
             let p = p.clone();
@@ -91,8 +92,8 @@ impl AudioDownloader {
                 r
             }
         }).await;
-        println!("  完成 {}/{} (跳过 {})", total - failed - skipped, total, skipped);
-        if failed > 0 { println!("  失败 {} 章", failed); }
+
+        println!("  ok {} 章, 跳过 {} 章{}", ok, skip, if fail > 0 { format!(", 失败 {} 章", fail) } else { String::new() });
 
         self.write_info_list(chapters, book_title);
         let secs = start.elapsed().as_secs();

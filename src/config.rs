@@ -114,6 +114,24 @@ post_process =
         fs::create_dir_all(&self.cache_dir).ok();
         if let Some(p) = self.bookmark_file.parent() { fs::create_dir_all(p).ok(); }
     }
+
+    pub fn validate(&self) {
+        let mut issues: Vec<String> = vec![];
+        if self.search_urls.is_empty() { issues.push("search_urls 为空".into()); }
+        if self.catalog_urls.is_empty() { issues.push("catalog_urls 为空".into()); }
+        if self.content_urls.is_empty() { issues.push("content_urls 为空".into()); }
+        if self.concurrent == 0 { issues.push("concurrent=0 无效，使用默认值".into()); }
+        if self.format != "txt" && self.format != "epub" { issues.push("format 必须是 txt 或 epub".into()); }
+        if !self.cache_dir.exists() {
+            if let Err(e) = fs::create_dir_all(&self.cache_dir) {
+                issues.push(format!("cache_dir 创建失败: {}", e));
+            }
+        }
+        if !issues.is_empty() {
+            eprintln!("  \x1b[33m配置警告:\x1b[0m");
+            for i in &issues { eprintln!("    - {}", i); }
+        }
+    }
 }
 
 pub fn load_bookmarks() -> Vec<(String, String)> {

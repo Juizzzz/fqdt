@@ -33,10 +33,10 @@ pub fn filter_by_range<'a>(
         .collect()
 }
 
-pub fn bar_style(colors: &str, concurrent: usize) -> ProgressStyle {
+pub fn bar_style(colors: &str, _concurrent: usize) -> ProgressStyle {
     ProgressStyle::default_bar()
         .template(&format!(
-            "[{{elapsed_precise}}] {{bar:28.{colors}}} {{pos}}/{{len}} ({}j) {{msg}}", concurrent
+            "[{{elapsed_precise}}] {{bar:24.{colors}}} {{pos}}/{{len}} {{msg}}"
         ))
         .unwrap()
         .progress_chars("━▶")
@@ -87,7 +87,7 @@ pub async fn with_progress_async<T, U, F, Fut>(
     concurrent: usize,
     colors: &str,
     work: F,
-) -> usize
+) -> (usize, usize)
 where
     T: Send + 'static,
     U: Send + 'static,
@@ -95,7 +95,7 @@ where
     Fut: std::future::Future<Output = Result<U, String>> + Send,
 {
     if items.is_empty() {
-        return 0;
+        return (0, 0);
     }
 
     let pb = ProgressBar::new(total as u64);
@@ -130,7 +130,9 @@ where
     }
 
     pb.finish_and_clear();
-    failed.load(Ordering::SeqCst)
+    let fail = failed.load(Ordering::SeqCst);
+    let ok = total - skipped - fail;
+    (ok, fail)
 }
 
 

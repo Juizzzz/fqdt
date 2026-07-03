@@ -180,6 +180,7 @@ async fn main() {
     );
     if let Some(to) = cli.timeout { cfg.timeout = to; }
     cfg.ensure_dirs();
+    cfg.validate();
     Config::save_default().ok();
 
     match cli.cmd {
