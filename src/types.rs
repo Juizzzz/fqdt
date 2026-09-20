@@ -100,7 +100,7 @@ pub struct DownloadParams {
 
 impl Default for Config {
     fn default() -> Self {
-        let home = get_home();
+        let paths = crate::platform::AppPaths::discover();
         Config {
             concurrent: default_concurrent(),
             format: "txt".into(),
@@ -108,9 +108,9 @@ impl Default for Config {
             filename_template: "{idx04}_{title}".into(),
             verbose: false,
             cache_enabled: true,
-            cache_dir: home.join(".config/fqdt/cache"),
+            cache_dir: paths.cache,
             cache_ttl: 86400,
-            bookmark_file: home.join(".config/fqdt/books.txt"),
+            bookmark_file: paths.config.join("books.txt"),
             search_urls: vec![
                 "https://novel.snssdk.com/api/novel/channel/homepage/search/search/v1/?aid=1967&q={}&offset={}".into(),
                 "http://101.35.133.34:5000/api/search?key={}&offset={}".into(),

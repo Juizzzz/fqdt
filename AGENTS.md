@@ -1,9 +1,9 @@
 # fqdt — 番茄小说下载器
 
-- **版本**: v0.4.0（`Cargo.toml` 中定义，每次变更更新）
+- **版本**: v0.6.0（`Cargo.toml` 中定义，每次变更更新）
 - **目标**: 番茄小说离线下载 + 音频获取 + 语音合成
-- **运行**: Android Termux (aarch64)
-- **编译**: GitHub Actions `cross` → `aarch64-unknown-linux-gnu` (glibc)
+- **运行**: macOS（Apple Silicon / Intel），兼容原 Linux / Termux
+- **编译**: macOS 原生 Cargo 双架构；Linux 继续使用 cross
 - **核心原则**: 基本函数原子化 → 高阶函数组合 → 预编译工作流 → 配置文件可扩展
 
 ---
@@ -499,12 +499,21 @@ fn workflow_download(api: &Client, p: DownloadParams, cfg: &Config) { ... }
 9. **💡 Rust 原生 lame** — 用 `lame-rs` 消除外部依赖
 10. **🧹 clippy 清理** — 解决 31 个 warnings
 
+11. [x] macOS 适配：原生配置/缓存目录、兼容已有配置、Apple Silicon/Intel 构建与安装。
+12. [x] 修复发布附件与下载脚本名称不一致；下载失败不得覆盖已有程序。
+13. [x] 修复 init 忽略错误仍报告成功；添加离线环境诊断与回归验证。
+14. [x] 音频 macOS 适配：限制 grun 为 Linux 回退，修复长文本 TTS 的命令行长度限制。
+15. [ ] 已有音频后处理 speed/normalize 参数尚未实现；本次保留接口，后续单独修复。
+16. [ ] 已有部分工作流遇到失败仍以退出码 0 结束；后续统一错误传播。
+17. [ ] 已有正文下载检查文件名时遗漏 .txt 后缀，且部分并发 EPUB/元数据错误路径需另行修复。
+18. [ ] 已有 API 错误文本按字节截断可能在 Unicode 边界 panic；正文空响应也可能误判为成功，需单独修复。
+
 ### 7.3 已知问题
 
 - 第三方 API 不稳定（偶发 5xx）
 - edge-tts 需要 Python 环境
 - 编译只能用 rustls（Termux 无 libssl-dev）
-- 本地 `cargo build` 为 debug 模式（release 需 cross，耗时长）
+- 本地 `cargo build` 为 debug 模式；macOS 使用 `cargo build --release`，Linux 交叉编译使用 cross。
 
 ---
 

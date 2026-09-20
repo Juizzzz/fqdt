@@ -1,10 +1,11 @@
-use crate::types::{Config, get_home};
+use crate::types::Config;
+use crate::platform::AppPaths;
 use std::fs;
 use std::path::PathBuf;
 
 impl Config {
     pub fn load() -> Self {
-        let path = get_home().join(".config/fqdt/config.ini");
+        let path = AppPaths::discover().config.join("config.ini");
         let mut cfg = Config::default();
         if let Ok(text) = fs::read_to_string(&path) {
             let mut section = String::new();
@@ -53,7 +54,7 @@ impl Config {
     }
 
     pub fn save_default() -> Result<(), String> {
-        let d = get_home().join(".config/fqdt");
+        let d = AppPaths::discover().config;
         fs::create_dir_all(&d).map_err(|e| e.to_string())?;
         let path = d.join("config.ini");
         if path.exists() { return Ok(()); }
@@ -135,7 +136,7 @@ post_process =
 }
 
 pub fn load_bookmarks() -> Vec<(String, String)> {
-    let path = get_home().join(".config/fqdt/books.txt");
+    let path = AppPaths::discover().config.join("books.txt");
     let mut books = vec![];
     if let Ok(text) = fs::read_to_string(&path) {
         for line in text.lines() {
@@ -150,7 +151,7 @@ pub fn load_bookmarks() -> Vec<(String, String)> {
 }
 
 pub fn add_bookmark(id: &str, title: &str) -> Result<(), String> {
-    let path = get_home().join(".config/fqdt/books.txt");
+    let path = AppPaths::discover().config.join("books.txt");
     fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
     let mut text = String::new();
     if let Ok(t) = fs::read_to_string(&path) { text = t; }
@@ -159,7 +160,7 @@ pub fn add_bookmark(id: &str, title: &str) -> Result<(), String> {
 }
 
 pub fn remove_bookmark(idx: usize) -> Result<(), String> {
-    let path = get_home().join(".config/fqdt/books.txt");
+    let path = AppPaths::discover().config.join("books.txt");
     let books = load_bookmarks();
     if idx == 0 || idx > books.len() { return Err("无效编号".into()); }
     let mut out = String::new();

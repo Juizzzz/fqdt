@@ -1,6 +1,7 @@
 use crate::api::Client;
 use crate::types::{default_concurrent, Chapter};
 use crate::util;
+use crate::platform::{find_tool, TemporaryText};
 use indicatif::ProgressBar;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -181,9 +182,9 @@ async fn dl_one(api: &Client, out_dir: &Path, ch: &Chapter, p: &AudioParams) -> 
 }
 
 fn download_file(url: &str, path: &PathBuf, verbose: bool) -> Result<(), String> {
-    if verbose { eprintln!("  [verbose] DL {}", &url[..url.len().min(80)]); }
+    if verbose { eprintln!("  [verbose] DL {}", url.chars().take(80).collect::<String>()); }
 
-    let r = std::process::Command::new("curl")
+    let r = std::process::Command::new(find_tool("curl").unwrap_or_else(|| "curl".into()))
         .args(["-sfL", "--connect-timeout", "15", "--max-time", "120",
             "-o", &path.to_string_lossy(), url])
         .output();
@@ -198,17 +199,18 @@ fn download_file(url: &str, path: &PathBuf, verbose: bool) -> Result<(), String>
         }
     }
 
-    let q = format!("curl -sfL --connect-timeout 15 --max-time 120 -o '{}' '{}'",
-        path.to_string_lossy().replace('\'', "'\\''"), url);
-    let r = std::process::Command::new("grun").args(["-s", &q]).output();
-    if let Ok(out) = r {
-        if out.status.success() {
-            let size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-            if size > 1000 { return Ok(()); }
+    // grun 仅用于原来的 Linux/Termux 环境，macOS 不尝试调用。
+    #[cfg(target_os = "linux")]
+    {
+        let q = format!("curl -sfL --connect-timeout 15 --max-time 120 -o '{}' '{}'",
+            path.to_string_lossy().replace('\'', "'\\''"), url.replace('\'', "'\\''"));
+        if let Ok(out) = std::process::Command::new("grun").args(["-s", &q]).output() {
+            if out.status.success() && fs::metadata(path).is_ok_and(|m| m.len() > 1000) {
+                return Ok(());
+            }
         }
     }
-
-    Err(format!("下载失败: curl 和 grun 均失败 ({})", &url[..url.len().min(80)]))
+    Err(format!("音频下载失败，请检查网络及 curl: {}", url.chars().take(80).collect::<String>()))
 }
 
 // ── Post-processing ─────────────────────────────────────────
@@ -237,7 +239,7 @@ pub fn post_process(path: &Path, abr: u32, speed: Option<f32>, normalize: bool,
         let t_s = tmp.to_string_lossy().to_string();
         let abr_s = abr.to_string();
         let args = vec!["--abr", &abr_s, "--silent", &p_s, &t_s];
-        match std::process::Command::new("lame").args(&args).output() {
+        match std::process::Command::new(find_tool("lame").unwrap_or_else(|| "lame".into())).args(&args).output() {
             Ok(out) if out.status.success() => true,
             Ok(out) => { eprintln!("  err lame 压缩失败 (exit={}): {}", out.status, String::from_utf8_lossy(&out.stderr).trim()); false }
             Err(e) => { eprintln!("  err lame 未安装或执行失败: {}", e); false }
@@ -441,12 +443,13 @@ pub fn convert_tts_dir(input: &Path, output_dir: Option<PathBuf>, params: &TtsPa
 
 fn run_edge_tts(text: &str, voice: &str, rate: &str, volume: &str, pitch: &str,
                 out_path: &Path, verbose: bool) -> Result<(), String> {
-    let r = std::process::Command::new("edge-tts")
-        .arg("-t").arg(text)
+    let input = TemporaryText::create(text)?;
+    let r = std::process::Command::new(find_tool("edge-tts").unwrap_or_else(|| "edge-tts".into()))
+        .arg("--file").arg(&input.0)
         .arg("-v").arg(voice)
-        .arg("--rate").arg(rate)
-        .arg("--volume").arg(volume)
-        .arg("--pitch").arg(pitch)
+        .arg(format!("--rate={}", rate))
+        .arg(format!("--volume={}", volume))
+        .arg(format!("--pitch={}", pitch))
         .arg("--write-media").arg(out_path.to_string_lossy().to_string())
         .output();
     if let Ok(out) = r {
@@ -457,7 +460,7 @@ fn run_edge_tts(text: &str, voice: &str, rate: &str, volume: &str, pitch: &str,
         if verbose {
             eprintln!("  [verbose] edge-tts: status={}, err={}", out.status, String::from_utf8_lossy(&out.stderr).trim());
         }
-        return Err(format!("edge-tts 退出码 {}", out.status));
+        return Err(format!("edge-tts 未生成有效音频 ({}): {}", out.status, String::from_utf8_lossy(&out.stderr).trim()));
     }
-    Err("找不到 edge-tts 命令".into())
+    Err("无法执行 edge-tts；macOS 可运行 brew install pipx，再运行 pipx install edge-tts".into())
 }

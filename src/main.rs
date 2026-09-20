@@ -1,6 +1,7 @@
 mod api;
 mod audio;
 mod config;
+mod platform;
 mod download;
 mod epub;
 mod types;
@@ -141,6 +142,8 @@ enum Cmd {
     },
     /// 生成默认配置
     Init,
+    /// 检查平台、配置路径及可选依赖（离线）
+    Doctor,
     /// 小工具集 + 函数管道（简写 fn）
     #[command(name = "function", alias = "fn")]
     Function {
@@ -172,6 +175,10 @@ enum Cmd {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    if matches!(cli.cmd, Cmd::Doctor) {
+        platform::doctor();
+        return;
+    }
     let mut cfg = Config::load();
     cfg.apply_cli_overrides(
         cli.search_url.as_deref(),
@@ -181,7 +188,10 @@ async fn main() {
     if let Some(to) = cli.timeout { cfg.timeout = to; }
     cfg.ensure_dirs();
     cfg.validate();
-    Config::save_default().ok();
+    if let Err(e) = Config::save_default() {
+        eprintln!("  err 无法创建配置: {}", e);
+        std::process::exit(1);
+    }
 
     match cli.cmd {
         Cmd::Search { keyword, page, auto, dry_run, output, jobs, range, format, interval, verbose } =>
@@ -200,7 +210,8 @@ async fn main() {
         Cmd::Get { target, output, range, format, jobs, force, verbose, audio, audio_only, tone, lrc, update, interval } =>
             dispatch_get(target, output, range, format, jobs, force, verbose, audio, audio_only, tone, lrc, update, interval, &cfg).await,
         Cmd::Shelf { add, delete, dl, update } => workflow::shelf::run(add, delete, dl, update, &cfg).await,
-        Cmd::Init => { Config::save_default().ok(); println!("  ok ~/.config/fqdt/config.ini"); }
+        Cmd::Init => println!("  ok {}", platform::AppPaths::discover().config.join("config.ini").display()),
+        Cmd::Doctor => unreachable!(),
         Cmd::Function { args } => run_function(args, &cfg).await,
         Cmd::Custom(args) => dispatch_custom(args, &cfg),
     }
